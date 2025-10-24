@@ -1,2 +1,2 @@
 # CapstoneBots
-App version 1.0 Merge conflict- Vraj Patel
+App version 1.0 Merge conflict- edited Vraj Patel
