@@ -66,7 +66,7 @@ Explain how to run the automated tests.
 # Authors
 
 Aarsh Patel - aarsh@email.sc.edu
-Alex Mesa - 
-Paksh Patel - 
-Robbie 
-Vraj Patel - 
+Alex Mesa - alex@email.sc.edu
+Paksh Patel - paksh@email.sc.edu
+Robbie Lastname - robbie.lastname@email.sc.edu
+Vraj Patel - vraj@email.sc.edu
