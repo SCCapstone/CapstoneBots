@@ -10,6 +10,9 @@ function App() {
 			A simple React front-end to show the Docker back-end.
 		</p>
         <p>
+			This is a simple frontend in react for a docker backend.
+		</p>
+		<p>
           Edit <code>src/App.js</code> and save to reload.
         </p>
         <a
