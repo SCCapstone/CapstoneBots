@@ -7,7 +7,7 @@ function App() {
       <header className="App-header">
         <img src={logo} className="App-logo" alt="logo" />
 		<p>
-			A simple React front-end to show the Docker back-end.
+			A simple React frontend to show the Docker backend.
 		</p>
         <p>
 			This is a simple frontend in react for a docker backend.
