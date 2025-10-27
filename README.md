@@ -163,4 +163,4 @@ Aarsh Patel - aarsh@email.sc.edu
 Alex Mesa - alex@email.sc.edu
 Paksh Patel - paksh@email.sc.edu
 Robbie Vann - jrvann@email.sc.edu
-Vraj Patel - vraj@email.sc.edu
+Vraj Patel - vtpatel@email.sc.edu
