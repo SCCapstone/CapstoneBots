@@ -160,7 +160,11 @@ Next steps
 # Authors
 
 Aarsh Patel - aarsh@email.sc.edu
+
 Alex Mesa - alex@email.sc.edu
+
 Paksh Patel - paksh@email.sc.edu
+
 Joseph Vann - jrvann@email.sc.edu
+
 Vraj Patel - vtpatel@email.sc.edu
