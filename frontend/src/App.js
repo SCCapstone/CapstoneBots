@@ -6,9 +6,6 @@ function App() {
     <div className="App">
       <header className="App-header">
         <img src={logo} className="App-logo" alt="logo" />
-		<p>
-			Simple React with Socker.
-		</p>
         <p>
 			This is a simple frontend in react for a docker backend.
 		</p>
