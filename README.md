@@ -1,14 +1,33 @@
 # CapstoneBots
 
-This first paragraph should be a short description of the app. You can add links
-to your wiki pages that have more detailed descriptions.
+Blender Collaborative Version Control System
 
-Your audience for the Readme.md are other developers who are joining your team.
-Specifically, the file should contain detailed instructions that any developer
-can follow to install, compile, run, and test your project. These are not only
-useful to new developers, but also to you when you have to re-install everything
-because your old laptop crashed. Also, the teachers of this class will be
-following your instructions.
+This project is a Version Control System (VCS) for Blender, enabling teams to collaborate on 3D projects with robust version management capabilities. It replaces traditional file-based VCS by exporting individual Blender objects as JSON (with mesh data stored separately), allowing efficient storage and granular version tracking.
+
+For in-depth information, see the Project Description Wiki.
+
+Main Features
+- Timeline & History: See all changes and revert to any previous state.
+- Merge Conflict Handling: Visualize and resolve merge conflicts directly in Blender.
+- Object-Level Locking: Prevent conflicting edits before they happen.
+- Web Dashboard: View project history, manage versions, and previews of 3D models.
+- Blender Addon: Export, commit, pull updates, and resolve conflicts from inside Blender.
+
+Technologies Used
+- Blender Addon: Python (bpy)
+- Backend API: FastAPI (Python)
+- Database: PostgreSQL
+- Object Storage: MinIO (meshes and blend snapshots)
+- Frontend: React + Tailwind CSS + model-viewer (3D model previews)
+- Authentication: JWT-based auth
+
+Installation and Setup
+1. Prerequisites
+- Python 3.9+
+- Node.js 18+ and npm
+- PostgreSQL
+- MinIO
+- Blender 3.0+
 
 ## External Requirements
 
@@ -18,19 +37,7 @@ run in their laptop. For example:
 In order to build this project you first have to install:
 
 -   [Node.js](https://nodejs.org/en/)
--   [MongoDB](https://www.mongodb.com/)
-
-If possible, list the actual commands you used to install these, so the reader
-can just cut-n-paste the commands and get everything setup.
-
-You only need to add instructions for the OS you are using.
-
-## Setup
-
-Here you list all the one-time things the developer needs to do after cloning
-your repo. Sometimes there is no need for this section, but some apps require
-some first-time configuration from the developer, for example: setting up a
-database for running your webapp locally.
+-   [Docker](https://www.docker.com/)
 
 ## Running
 
