@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import users
 
 app = FastAPI(
     title="CapstoneBots API",
@@ -16,6 +17,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include user/auth routes (in-memory fallback for development)
+app.include_router(users.router, prefix="/api")
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to CapstoneBots API", "version": "1.0.0"}
@@ -24,18 +28,6 @@ async def root():
 async def health_check():
     return {"status": "healthy"}
 
-@app.get("/api/bots")
-async def get_bots():
-    # Placeholder for bot data
-    return [
-        {"id": 1, "name": "Discord Bot", "type": "discord", "active": True},
-        {"id": 2, "name": "Telegram Bot", "type": "telegram", "active": False}
-    ]
-
-@app.post("/api/bots")
-async def create_bot(bot_data: dict):
-    # Placeholder for creating a bot
-    return {"message": "Bot created", "data": bot_data}
 
 if __name__ == "__main__":
     import uvicorn

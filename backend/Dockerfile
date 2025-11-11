@@ -2,9 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies (add libs for bcrypt/cryptography native builds)
 RUN apt-get update && apt-get install -y \
     build-essential \
+    libssl-dev \
+    libffi-dev \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching

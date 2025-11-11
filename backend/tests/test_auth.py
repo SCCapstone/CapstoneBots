@@ -1,0 +1,45 @@
+import sys
+import os
+from fastapi.testclient import TestClient
+
+# Ensure the application root is on sys.path when pytest runs from inside /app/tests
+root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if root not in sys.path:
+    sys.path.insert(0, root)
+
+import importlib.util
+
+# Load main.py directly to avoid pytest import path issues
+spec = importlib.util.spec_from_file_location("main", os.path.join(root, "main.py"))
+main = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(main)
+app = main.app
+
+import auth
+
+
+client = TestClient(app)
+
+
+def test_register_and_login():
+    # Ensure we can register a new user and then login to receive a token
+    email = "test@example.com"
+    password = "s3cret"
+
+    # Register
+    r = client.post("/api/register", json={"email": email, "password": password})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["email"] == email
+    assert "id" in body
+
+    # Login
+    r = client.post("/api/login", json={"email": email, "password": password})
+    assert r.status_code == 200, r.text
+    token_resp = r.json()
+    assert "access_token" in token_resp
+    assert token_resp["token_type"] == "bearer"
+
+    # Verify token decodes and contains sub
+    payload = auth.decode_access_token(token_resp["access_token"])
+    assert payload.get("sub") == email
