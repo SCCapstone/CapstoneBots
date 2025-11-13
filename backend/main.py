@@ -1,13 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from routers import projects # This imports the projects router
+
 app = FastAPI(
     title="CapstoneBots API",
     version="1.0.0",
     description="A simple API for CapstoneBots"
 )
 
-# Configure CORS for React frontend
+# This is the CORS middleware configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://frontend:3000"],
@@ -16,26 +18,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
-async def root():
-    return {"message": "Welcome to CapstoneBots API", "version": "1.0.0"}
-
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy"}
+    return {"status": "ok", "service": "CapstoneBots API"}
 
-@app.get("/api/bots")
-async def get_bots():
-    # Placeholder for bot data
-    return [
-        {"id": 1, "name": "Discord Bot", "type": "discord", "active": True},
-        {"id": 2, "name": "Telegram Bot", "type": "telegram", "active": False}
-    ]
-
-@app.post("/api/bots")
-async def create_bot(bot_data: dict):
-    # Placeholder for creating a bot
-    return {"message": "Bot created", "data": bot_data}
+# This includes the projects router under the /api/projects prefix
+app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 
 if __name__ == "__main__":
     import uvicorn
