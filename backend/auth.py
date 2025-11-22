@@ -2,6 +2,7 @@
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+import logging
 
 from jose import jwt
 import bcrypt
@@ -11,6 +12,13 @@ import hashlib
 SECRET_KEY = os.getenv("JWT_SECRET", "dev-secret")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+
+# Warn if using default secret key
+if SECRET_KEY == "dev-secret":
+    logging.warning(
+        "Using default JWT_SECRET='dev-secret'. This is insecure for production. "
+        "Set the JWT_SECRET environment variable to a secure random value."
+    )
 
 
 def _prehash(password: str) -> bytes:
