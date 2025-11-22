@@ -19,6 +19,17 @@ class UserResponse(UserBase):
     class Config:
         from_attributes = True
 
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    email: Optional[str] = None
+
 # ============== Project Schemas ==============
 class ProjectBase(BaseModel):
     name: str

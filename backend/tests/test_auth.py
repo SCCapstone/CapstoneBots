@@ -18,28 +18,28 @@ app = main.app
 import auth
 
 
-client = TestClient(app)
-
-
 def test_register_and_login():
     # Ensure we can register a new user and then login to receive a token
+    username = "testuser"
     email = "test@example.com"
     password = "s3cret"
 
-    # Register
-    r = client.post("/api/register", json={"email": email, "password": password})
-    assert r.status_code == 201, r.text
-    body = r.json()
-    assert body["email"] == email
-    assert "id" in body
+    with TestClient(app) as client:
+        # Register
+        r = client.post("/api/auth/register", json={"username": username, "email": email, "password": password})
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["email"] == email
+        assert "user_id" in body
 
-    # Login
-    r = client.post("/api/login", json={"email": email, "password": password})
-    assert r.status_code == 200, r.text
-    token_resp = r.json()
-    assert "access_token" in token_resp
-    assert token_resp["token_type"] == "bearer"
+        # Login
+        r = client.post("/api/auth/login", json={"email": email, "password": password})
+        assert r.status_code == 200, r.text
+        token_resp = r.json()
+        assert "access_token" in token_resp
+        assert token_resp["token_type"] == "bearer"
 
-    # Verify token decodes and contains sub
-    payload = auth.decode_access_token(token_resp["access_token"])
-    assert payload.get("sub") == email
+        # Verify token decodes and contains sub
+        payload = auth.decode_access_token(token_resp["access_token"])
+        assert payload.get("sub") == email
+

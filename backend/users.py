@@ -1,39 +1,46 @@
-from fastapi import APIRouter, HTTPException, status
-from typing import Dict
+from fastapi import APIRouter, HTTPException, status, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
+from database import get_db
+from models import User
+import schemas
 import auth
-from schemas import UserIn, UserOut, Token
 
 router = APIRouter()
 
-# Simple in-memory user "database". Keys: email -> {id, email, hashed_password}
-USERS_DB: Dict[str, Dict] = {}
-_ID_SEQ = 1
+@router.post("/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
+async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
+    # Check if user exists
+    result = await db.execute(select(User).where((User.email == user.email) | (User.username == user.username)))
+    existing_user = result.scalars().first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username or email already registered")
+
+    hashed_password = auth.get_password_hash(user.password)
+    new_user = User(
+        username=user.username,
+        email=user.email,
+        password_hash=hashed_password
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    return new_user
 
 
-def _next_id() -> int:
-    global _ID_SEQ
-    v = _ID_SEQ
-    _ID_SEQ += 1
-    return v
+@router.post("/login", response_model=schemas.Token)
+async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(get_db)):
+    # Find user by email
+    result = await db.execute(select(User).where(User.email == user_credentials.email))
+    user = result.scalars().first()
 
-
-@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def register(user: UserIn):
-    email = user.email.lower()
-    if email in USERS_DB:
-        raise HTTPException(status_code=400, detail="User already exists")
-    hashed = auth.get_password_hash(user.password)
-    user_obj = {"id": _next_id(), "email": email, "hashed_password": hashed}
-    USERS_DB[email] = user_obj
-    return {"id": user_obj["id"], "email": user_obj["email"]}
-
-
-@router.post("/login", response_model=Token)
-def login(form_data: UserIn):
-    email = form_data.email.lower()
-    user = USERS_DB.get(email)
-    if not user or not auth.verify_password(form_data.password, user["hashed_password"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    access_token = auth.create_access_token({"sub": email})
+    if not user or not auth.verify_password(user_credentials.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token = auth.create_access_token(data={"sub": user.email})
     return {"access_token": access_token, "token_type": "bearer"}
