@@ -12,10 +12,18 @@ router = APIRouter()
 @router.post("/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
     # Check if user exists
-    result = await db.execute(select(User).where((User.email == user.email) | (User.username == user.username)))
-    existing_user = result.scalars().first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Username or email already registered")
+    # Check if email exists
+    email_result = await db.execute(select(User).where(User.email == user.email))
+    email_user = email_result.scalars().first()
+    # Check if username exists
+    username_result = await db.execute(select(User).where(User.username == user.username))
+    username_user = username_result.scalars().first()
+    if email_user and username_user:
+        raise HTTPException(status_code=400, detail="Both username and email are already registered")
+    elif email_user:
+        raise HTTPException(status_code=400, detail="Email is already registered")
+    elif username_user:
+        raise HTTPException(status_code=400, detail="Username is already registered")
 
     hashed_password = auth.get_password_hash(user.password)
     new_user = User(
