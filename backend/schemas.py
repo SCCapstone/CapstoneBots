@@ -1,12 +1,12 @@
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from datetime import datetime
 from uuid import UUID
 
 # ============== User Schemas ==============
 class UserBase(BaseModel):
     username: str
-    email: str
+    email: EmailStr
 
 class UserCreate(UserBase):
     password: str
@@ -18,6 +18,17 @@ class UserResponse(UserBase):
 
     class Config:
         from_attributes = True
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    email: Optional[EmailStr] = None
 
 # ============== Project Schemas ==============
 class ProjectBase(BaseModel):

@@ -1,8 +1,15 @@
+import sys
+import os
+
+# Add the current directory to sys.path to allow imports from the same directory
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from routers import projects
+import users
 from database import init_db, close_db
 
 @asynccontextmanager
@@ -38,6 +45,7 @@ async def health_check():
 
 # Include routers
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
+app.include_router(users.router, prefix="/api/auth", tags=["auth"])
 
 if __name__ == "__main__":
     import uvicorn
