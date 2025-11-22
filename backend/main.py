@@ -1,14 +1,28 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import users
+from contextlib import asynccontextmanager
+
+from routers import projects
+from database import init_db, close_db
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await init_db()
+    print("Database initialized successfully")
+    yield
+    # Shutdown
+    await close_db()
+    print("Database connection closed")
 
 app = FastAPI(
     title="CapstoneBots API",
     version="1.0.0",
-    description="A simple API for CapstoneBots"
+    description="A Blender Collaborative Version Control System API",
+    lifespan=lifespan
 )
 
-# Configure CORS for React frontend
+# CORS middleware configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://frontend:3000"],
@@ -17,17 +31,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include user/auth routes (in-memory fallback for development)
-app.include_router(users.router, prefix="/api")
-
-@app.get("/")
-async def root():
-    return {"message": "Welcome to CapstoneBots API", "version": "1.0.0"}
-
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy"}
+    """Health check endpoint."""
+    return {"status": "ok", "service": "CapstoneBots API"}
 
+# Include routers
+app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 
 if __name__ == "__main__":
     import uvicorn

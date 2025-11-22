@@ -6,14 +6,27 @@ This project is a Version Control System (VCS) for Blender, enabling teams to co
 
 For in-depth information, see the Project Description Wiki.
 
-Main Features
+## Quick Start (Docker)
+
+The easiest way to run the entire application (Database, Backend, and Frontend) is using Docker Compose.
+
+1.  **Prerequisites:** Ensure you have [Docker](https://www.docker.com/) and Docker Compose installed.
+2.  **Run:**
+    ```bash
+    docker-compose up --build
+    ```
+3.  **Access:**
+    *   Frontend: [http://localhost:3000](http://localhost:3000)
+    *   Backend API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+## Main Features
 - Timeline & History: See all changes and revert to any previous state.
 - Merge Conflict Handling: Visualize and resolve merge conflicts directly in Blender.
 - Object-Level Locking: Prevent conflicting edits before they happen.
 - Web Dashboard: View project history, manage versions, and previews of 3D models.
 - Blender Addon: Export, commit, pull updates, and resolve conflicts from inside Blender.
 
-Technologies Used
+## Technologies Used
 - Blender Addon: Python (bpy)
 - Backend API: FastAPI (Python)
 - Database: PostgreSQL
@@ -21,29 +34,62 @@ Technologies Used
 - Frontend: React + Tailwind CSS + model-viewer (3D model previews)
 - Authentication: JWT-based auth
 
-Installation and Setup
-1. Prerequisites
+## Manual Installation and Setup
+
+If you prefer to run services individually without Docker, follow these steps.
+
+### Prerequisites
 - Python 3.9+
 - Node.js 18+ and npm
-- PostgreSQL
-- MinIO
+- PostgreSQL (running locally or accessible)
+- MinIO (running locally or accessible)
 - Blender 3.0+
 
-## External Requirements
+### 1. Database Setup
+Ensure you have a PostgreSQL database running.
+```bash
+# Example using Docker for just the DB
+docker-compose up -d db
+```
 
-List all the stuff the reader will need to install in order to get you app to
-run in their laptop. For example:
+### 2. Backend Setup (FastAPI)
 
-In order to build this project you first have to install:
+1.  Navigate to the backend directory:
+    ```bash
+    cd backend
+    ```
+2.  Create and activate a virtual environment:
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate  # On Windows use: .venv\Scripts\activate
+    ```
+3.  Install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+4.  Run the server:
+    ```bash
+    uvicorn main:app --reload --host 0.0.0.0 --port 8000
+    ```
+    The API will be available at [http://localhost:8000](http://localhost:8000).
 
--   [Node.js](https://nodejs.org/en/)
--   [Docker](https://www.docker.com/)
+### 3. Frontend Setup (React)
 
-## Running
+1.  Navigate to the frontend directory:
+    ```bash
+    cd frontend
+    ```
+2.  Install dependencies:
+    ```bash
+    npm install
+    ```
+3.  Start the development server:
+    ```bash
+    npm start
+    ```
+    The application will open at [http://localhost:3000](http://localhost:3000).
 
-Specify the commands for a developer to run the app from the cloned repo.
-
-# Deployment
+## Deployment
 
 Webapps need a deployment section that explains how to get it deployed on the
 Internet. These should be detailed enough so anyone can re-deploy if needed
@@ -52,51 +98,6 @@ Internet. These should be detailed enough so anyone can re-deploy if needed
 Mobile apps will also sometimes need some instructions on how to build a
 "release" version, maybe how to sign it, and how to run that binary in an
 emulator or in a physical phone.
-
-## Running
-
-These instructions show how to run the frontend and backend both locally (for development) and with Docker. The project root is the repository top-level where this `README.md` lives.
-
-Prerequisites
-- Docker (and docker-compose if you want the compose workflow)
-- Node.js (for running frontend locally)
-- Python 3 (for running backend locally)
-
-Run the services locally (development)
-
-Backend (FastAPI)
-
-1. Change to the backend directory and create/activate a virtual environment:
-
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-2. Install Python dependencies and run the app with uvicorn (hot reload):
-
-```bash
-pip install -r requirements.txt
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
-
-The backend will be available at: http://localhost:8000
-
-Frontend (React)
-
-1. Change to the frontend directory and install dependencies:
-
-```bash
-cd frontend
-npm install
-```
-
-2. (Optional) Point the frontend at your running backend (default assumes http://localhost:8000):
-
-```bash
-export REACT_APP_API_URL=http://localhost:8000
-```
 
 3. Start the development server (hot reload):
 

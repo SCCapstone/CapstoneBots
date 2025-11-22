@@ -1,55 +1,64 @@
 version: '3.8'
 
 services:
+  db:
+    image: postgres:15-alpine
+    container_name: capstonebots-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: capstonebots
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - capstonebots-network
+
   backend:
-    build: 
+    build:
       context: ./backend
       dockerfile: Dockerfile
+    container_name: capstonebots-backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/capstonebots
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: capstonebots
     ports:
       - "8000:8000"
-    environment:
-      - DATABASE_URL=mongodb://mongo:27017/capstone_bots
-      - PYTHONPATH=/app
     volumes:
       - ./backend:/app
-      - /app/__pycache__
-    depends_on:
-      - mongo
     networks:
-      - app-network
+      - capstonebots-network
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    container_name: capstonebots-frontend
     ports:
       - "3000:3000"
     environment:
-      - REACT_APP_API_URL=http://localhost:8000
-      - CHOKIDAR_USEPOLLING=true  # For hot reload on some systems
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      REACT_APP_API_URL: http://backend:8000
     depends_on:
       - backend
-    networks:
-      - app-network
-
-  mongo:
-    image: mongo:6
-    ports:
-      - "27017:27017"
     volumes:
-      - mongo_data:/data/db
-      - ./mongo-init:/docker-entrypoint-initdb.d
-    environment:
-      - MONGO_INITDB_DATABASE=capstone_bots
+      - ./frontend:/app
     networks:
-      - app-network
+      - capstonebots-network
 
 volumes:
-  mongo_data:
+  postgres_data:
 
 networks:
-  app-network:
+  capstonebots-network:
     driver: bridge
