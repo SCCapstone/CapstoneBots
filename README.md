@@ -31,7 +31,7 @@ The easiest way to run the entire application (Database, Backend, and Frontend) 
 - Backend API: FastAPI (Python)
 - Database: PostgreSQL
 - Object Storage: MinIO (meshes and blend snapshots)
-- Frontend: React + Tailwind CSS + model-viewer (3D model previews)
+- Frontend: Next.JS + Tailwind CSS + model-viewer (3D model previews)
 - Authentication: JWT-based auth
 
 ## Manual Installation and Setup
@@ -40,7 +40,7 @@ If you prefer to run services individually without Docker, follow these steps.
 
 ### Prerequisites
 - Python 3.9+
-- Node.js 18+ and npm
+- Node.js 20+ and npm
 - PostgreSQL (running locally or accessible)
 - MinIO (running locally or accessible)
 - Blender 3.0+
@@ -73,7 +73,7 @@ docker-compose up -d db
     ```
     The API will be available at [http://localhost:8000](http://localhost:8000).
 
-### 3. Frontend Setup (React)
+### 3. Frontend Setup (Next.JS)
 
 1.  Navigate to the frontend directory:
     ```bash
