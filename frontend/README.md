@@ -1,3 +1,32 @@
+# CapstoneBots Frontend
+
+This is the React frontend for the CapstoneBots project.
+
+## Quick Start
+
+1.  **Install dependencies:**
+    ```bash
+    npm install
+    ```
+
+2.  **Start the development server:**
+    ```bash
+    npm start
+    ```
+    Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+
+## Configuration
+
+By default, the frontend connects to the backend at `http://localhost:8000`.
+To change this, set the `REACT_APP_API_URL` environment variable:
+
+```bash
+export REACT_APP_API_URL=http://your-backend-url:8000
+npm start
+```
+
+---
+
 # Getting Started with Create React App
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).

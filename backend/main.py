@@ -1,15 +1,35 @@
+import sys
+import os
+
+# Add the current directory to sys.path to allow imports from the same directory
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 
-from routers import projects # This imports the projects router
+from routers import projects
+import users
+from database import init_db, close_db
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await init_db()
+    print("Database initialized successfully")
+    yield
+    # Shutdown
+    await close_db()
+    print("Database connection closed")
 
 app = FastAPI(
     title="CapstoneBots API",
     version="1.0.0",
-    description="A simple API for CapstoneBots"
+    description="A Blender Collaborative Version Control System API",
+    lifespan=lifespan
 )
 
-# This is the CORS middleware configuration
+# CORS middleware configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://frontend:3000"],
@@ -20,10 +40,12 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health_check():
+    """Health check endpoint."""
     return {"status": "ok", "service": "CapstoneBots API"}
 
-# This includes the projects router under the /api/projects prefix
+# Include routers
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
+app.include_router(users.router, prefix="/api/auth", tags=["auth"])
 
 if __name__ == "__main__":
     import uvicorn
