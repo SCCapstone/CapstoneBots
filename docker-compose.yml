@@ -48,11 +48,9 @@ services:
     ports:
       - "3000:3000"
     environment:
-      REACT_APP_API_URL: http://backend:8000
+      NEXT_PUBLIC_API_BASE_URL: http://backend:8000
     depends_on:
       - backend
-    volumes:
-      - ./frontend:/app
     networks:
       - capstonebots-network
 
