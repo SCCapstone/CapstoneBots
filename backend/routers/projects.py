@@ -1,49 +1,65 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from sqlalchemy.orm import joinedload
 from uuid import UUID
 import hashlib
 from datetime import datetime
 
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
+
 from database import get_db
-from models import Project, Branch, Commit, BlenderObject, ObjectLock, MergeConflict
+from models import Project, Branch, Commit, BlenderObject, ObjectLock, MergeConflict, User
 from schemas import (
     ProjectCreate, ProjectResponse, ProjectUpdate, ProjectBase,
     BranchCreate, BranchResponse,
     CommitCreate, CommitResponse, CommitCreateRequest,
     BlenderObjectCreate, BlenderObjectResponse,
     ObjectLockCreate, ObjectLockResponse,
-    MergeConflictResponse
+    MergeConflictResponse,
 )
+from auth import get_current_user
+
 
 router = APIRouter()
 
 # ============== Project Routes ==============
 
 @router.get("/", response_model=List[ProjectResponse])
-async def get_projects(db: AsyncSession = Depends(get_db)):
-    """Get all projects."""
-    query = select(Project).order_by(Project.created_at.desc())
+async def get_projects(
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+):
+    """Get projects for the current user."""
+    query = (
+        select(Project)
+        .where(Project.owner_id == current_user.user_id)
+        .order_by(Project.created_at.desc())
+    )
     result = await db.execute(query)
     return result.scalars().all()
 
 @router.post("/", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_project(
-    project: ProjectCreate,
-    db: AsyncSession = Depends(get_db)
+        project: ProjectCreate,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
-    """Create a new project."""
-    new_project = Project(**project.dict())
+    """Create a new project for the authenticated user."""
+    new_project = Project(
+        name=project.name,
+        description=project.description,
+        active=project.active,
+        owner_id=current_user.user_id,
+    )
     db.add(new_project)
     await db.flush()
-    
+
     # Create default main branch
     main_branch = Branch(
         project_id=new_project.project_id,
         branch_name="main",
-        created_by=new_project.owner_id
+        created_by=new_project.owner_id,
     )
     db.add(main_branch)
     await db.commit()

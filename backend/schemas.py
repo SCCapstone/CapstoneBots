@@ -37,7 +37,7 @@ class ProjectBase(BaseModel):
     active: bool = True
 
 class ProjectCreate(ProjectBase):
-    owner_id: UUID
+    pass
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None

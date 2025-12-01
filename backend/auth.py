@@ -1,12 +1,19 @@
-
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import logging
 
-from jose import jwt
+from jose import JWTError, jwt
 import bcrypt
 import hashlib
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+
+from database import get_db
+from models import User
 
 # Config
 SECRET_KEY = os.getenv("JWT_SECRET", "dev-secret")
@@ -59,3 +66,43 @@ def decode_access_token(token: str) -> dict:
     # Will raise jose.JWTError subclasses on failure
     payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     return payload
+
+security = HTTPBearer()
+
+async def get_current_user(
+        credentials: HTTPAuthorizationCredentials = Depends(security),
+        db: AsyncSession = Depends(get_db),
+) -> User:
+    """
+    Resolve the currently authenticated user from the Bearer token.
+
+    Uses the 'sub' field in the JWT payload (we set it to the user's email in login).
+    """
+    token = credentials.credentials
+
+    try:
+        payload = decode_access_token(token)
+        email = payload.get("sub")
+        if email is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token: missing subject",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalars().first()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return user

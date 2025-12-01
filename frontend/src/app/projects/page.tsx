@@ -1,10 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
-import { fetchProjects, Project } from "@/lib/projectsApi";
+import {
+  fetchProjects,
+  Project,
+  createProject,
+  ProjectCreatePayload,
+} from "@/lib/projectsApi";
 
 export default function ProjectsPage() {
   const router = useRouter();
@@ -14,17 +19,23 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Modal state
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newDescription, setNewDescription] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState("");
+
   // If not authenticated, send to /login
   useEffect(() => {
     if (!token) {
-      // let AuthProvider hydrate first before redirecting
       if (!isAuthenticated) {
         router.replace("/login");
       }
       return;
     }
 
-    const load = async () => {
+    (async () => {
       setLoading(true);
       setError("");
       try {
@@ -35,13 +46,11 @@ export default function ProjectsPage() {
       } finally {
         setLoading(false);
       }
-    };
+    })();
 
-    load();
   }, [token, isAuthenticated, router]);
 
   if (!token && !isAuthenticated) {
-    // tiny placeholder while redirect runs
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#0f172a] text-sm text-slate-400">
         Redirecting to login...
@@ -49,8 +58,43 @@ export default function ProjectsPage() {
     );
   }
 
+  const handleCreateProject = async (e: FormEvent) => {
+    e.preventDefault();
+    setCreateError("");
+
+    if (!token) return;
+
+    if (!newName.trim()) {
+      setCreateError("Project name is required.");
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const payload: ProjectCreatePayload = {
+        name: newName.trim(),
+        description: newDescription.trim() || undefined,
+        active: true,
+      };
+
+      const created = await createProject(token, payload);
+
+      // Add new project to top of list
+      setProjects((prev) => [created, ...prev]);
+
+      // Reset + close modal
+      setNewName("");
+      setNewDescription("");
+      setShowCreate(false);
+    } catch (err: any) {
+      setCreateError(err?.message || "Failed to create project.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#0f172a] px-4">
+    <div className="relative flex min-h-screen items-center justify-center bg-[#0f172a] px-4">
       <div className="w-full max-w-3xl">
         {/* Header */}
         <div className="mb-6 flex items-center justify-between">
@@ -62,15 +106,28 @@ export default function ProjectsPage() {
               Select a project to view its commits and object history.
             </p>
           </div>
-          <button
-            onClick={() => {
-              logout();
-              router.replace("/login");
-            }}
-            className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:border-sky-500 hover:text-sky-200 transition"
-          >
-            Log out
-          </button>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                setCreateError("");
+                setShowCreate(true);
+              }}
+              className="rounded-lg bg-sky-600 px-3 py-1 text-xs font-semibold text-white hover:bg-sky-500 transition"
+            >
+              + New Project
+            </button>
+
+            <button
+              onClick={() => {
+                logout();
+                router.replace("/login");
+              }}
+              className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:border-sky-500 hover:text-sky-200 transition"
+            >
+              Log out
+            </button>
+          </div>
         </div>
 
         {/* Loading / Error states */}
@@ -79,12 +136,12 @@ export default function ProjectsPage() {
         )}
 
         {error && (
-          <p className="text-xs text-red-400 mb-3">{error}</p>
+          <p className="mb-3 text-xs text-red-400">{error}</p>
         )}
 
         {!loading && !error && projects.length === 0 && (
           <p className="text-xs text-slate-500">
-            No projects found. Try creating one in the backend.
+            No projects found. Try creating one.
           </p>
         )}
 
@@ -123,6 +180,88 @@ export default function ProjectsPage() {
           ))}
         </div>
       </div>
+
+      {/* Create Project Overlay */}
+      {showCreate && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900/90 p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-white">
+                Create New Project
+              </h2>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!creating) {
+                    setShowCreate(false);
+                    setCreateError("");
+                  }
+                }}
+                className="text-xs text-slate-400 hover:text-slate-200"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateProject} className="space-y-4">
+              <div className="text-left">
+                <label className="mb-1 block text-[11px] font-medium text-slate-300">
+                  Project Name
+                </label>
+                <input
+                  type="text"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none focus:border-sky-500"
+                  placeholder="Blender Environment v1"
+                  required
+                />
+              </div>
+
+              <div className="text-left">
+                <label className="mb-1 block text-[11px] font-medium text-slate-300">
+                  Description (optional)
+                </label>
+                <textarea
+                  value={newDescription}
+                  onChange={(e) => setNewDescription(e.target.value)}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none focus:border-sky-500"
+                  rows={3}
+                  placeholder="Short description of this Blender project..."
+                />
+              </div>
+
+              {createError && (
+                <p className="text-[11px] text-red-400">
+                  {createError}
+                </p>
+              )}
+
+              <div className="mt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!creating) {
+                      setShowCreate(false);
+                      setCreateError("");
+                    }
+                  }}
+                  className="rounded-lg border border-slate-700 px-3 py-1 text-[11px] text-slate-300 hover:border-slate-500"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={creating}
+                  className="rounded-lg bg-sky-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {creating ? "Creating..." : "Create Project"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

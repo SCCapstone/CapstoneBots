@@ -8,18 +8,28 @@ import Link from "next/link";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login, isAuthenticated } = useAuth();
+  const { login, isAuthenticated, hydrated } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // ⬇ Prevent login page flash
   useEffect(() => {
-    if (isAuthenticated) {
+    if (hydrated && isAuthenticated) {
       router.replace("/projects");
     }
-  }, [isAuthenticated, router]);
+  }, [hydrated, isAuthenticated, router]);
+
+  // ⬇ Show nothing until auth state is ready
+  if (!hydrated) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#0f172a] text-slate-400">
+        Loading...
+      </div>
+    );
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -28,7 +38,7 @@ export default function LoginPage() {
 
     try {
       const res = await loginApi(email, password);
-      login(res.access_token, email);
+      login(res.access_token);
       router.replace("/projects");
     } catch {
       setError("Invalid email or password.");
