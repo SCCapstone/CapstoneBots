@@ -5,7 +5,7 @@ from sqlalchemy.future import select
 from database import get_db
 from models import User
 import schemas
-import auth
+from utils import auth
 
 router = APIRouter()
 

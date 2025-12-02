@@ -18,7 +18,7 @@ from schemas import (
     ObjectLockCreate, ObjectLockResponse,
     MergeConflictResponse,
 )
-from auth import get_current_user
+from utils.auth import get_current_user
 
 
 router = APIRouter()

@@ -8,8 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from routers import projects
-import users
+from routers import projects, users
 from database import init_db, close_db
 
 @asynccontextmanager
