@@ -31,7 +31,11 @@ app = FastAPI(
 # CORS middleware configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://capstone-bots.vercel.app"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://capstone-bots.vercel.app",
+        "https://capstonebots-production.up.railway.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
