@@ -8,7 +8,7 @@ export type SignupPayload = {
 };
 
 export async function loginApi(email: string, password: string) {
-  const res = await fetch(`${API_BASE}/users/login`, {
+  const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -20,7 +20,7 @@ export async function loginApi(email: string, password: string) {
 }
  
 export async function signupApi(payload: SignupPayload) {
-  const res = await fetch(`${API_BASE}/users/signup`, {
+  const res = await fetch(`${API_BASE}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

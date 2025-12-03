@@ -17,7 +17,7 @@ export type ProjectCreatePayload = {
 };
 
 export async function fetchProjects(token: string): Promise<Project[]> {
-  const res = await fetch(`${API_BASE}/projects`, {
+  const res = await fetch(`${API_BASE}/api/api/projects`, {
     method: "GET",
     headers: {
       "Authorization": `Bearer ${token}`,
@@ -30,7 +30,7 @@ export async function fetchProjects(token: string): Promise<Project[]> {
 }
 
 export async function createProject(token: string, payload: ProjectCreatePayload): Promise<Project> {
-  const res = await fetch(`${API_BASE}/projects`, {
+  const res = await fetch(`${API_BASE}/api/projects`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -45,7 +45,7 @@ export async function createProject(token: string, payload: ProjectCreatePayload
 }
 
 export async function deleteProject(token: string, id: string): Promise<{ success: boolean }>{
-  const res = await fetch(`${API_BASE}/projects/${id}`, {
+  const res = await fetch(`${API_BASE}/api/projects/${id}`, {
     method: "DELETE",
     headers: {
       "Authorization": `Bearer ${token}`,
