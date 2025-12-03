@@ -1,4 +1,4 @@
-const API_BASE = process.env.BACKEND_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
 export type Project = {
   id?: string;
@@ -17,7 +17,7 @@ export type ProjectCreatePayload = {
 };
 
 export async function fetchProjects(token: string): Promise<Project[]> {
-  const res = await fetch(`${API_BASE}/api/api/projects`, {
+  const res = await fetch(`${API_BASE}/api/projects`, {
     method: "GET",
     headers: {
       "Authorization": `Bearer ${token}`,

@@ -1,10 +1,9 @@
-const API_BASE = process.env.BACKEND_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
 export type SignupPayload = {
+  username: string;
   email: string;
   password: string;
-  name?: string;
-  username?: string;
 };
 
 export async function loginApi(email: string, password: string) {
