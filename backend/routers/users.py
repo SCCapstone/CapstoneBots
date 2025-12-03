@@ -16,7 +16,7 @@ from sqlalchemy.future import select
 from database import get_db
 from models import User
 import schemas
-from utils import auth
+from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user
 
 # Initialize the router for authentication endpoints
 router = APIRouter()
@@ -65,7 +65,7 @@ async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db))
         raise HTTPException(status_code=400, detail="Username is already registered")
 
     # Hash the password securely using bcrypt (via utils.auth module)
-    hashed_password = auth.get_password_hash(user.password)
+    hashed_password = get_password_hash(user.password)
     
     # Create new user instance with hashed password
     new_user = User(
@@ -120,7 +120,7 @@ async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(
 
     # Verify user exists and password matches the stored hash
     # Note: We use the same error message for both cases to prevent user enumeration attacks
-    if not user or not auth.verify_password(user_credentials.password, user.password_hash):
+    if not user or not verify_password(user_credentials.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -129,13 +129,13 @@ async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(
     
     # Generate JWT token with user's email as the subject claim
     # The token can be decoded later to identify the authenticated user
-    access_token = auth.create_access_token(data={"sub": user.email})
+    access_token = create_access_token(data={"sub": user.email})
     
     return {"access_token": access_token, "token_type": "bearer"}
 
 
 @router.get("/me", response_model=schemas.UserResponse)
-async def get_current_user_info(current_user: User = Depends(auth.get_current_user)):
+async def get_current_user_info(current_user: User = Depends(get_current_user)):
     """
     Get currently authenticated user's information.
     
