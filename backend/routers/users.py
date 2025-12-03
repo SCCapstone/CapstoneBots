@@ -7,6 +7,7 @@ It provides JWT-based authentication for secure access to the application.
 Endpoints:
     POST /register - Create a new user account
     POST /login - Authenticate and receive access token
+    GET /me - Get current authenticated user information
 """
 
 from fastapi import APIRouter, HTTPException, status, Depends
