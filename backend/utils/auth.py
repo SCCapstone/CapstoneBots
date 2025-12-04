@@ -15,17 +15,32 @@ from sqlalchemy.future import select
 from database import get_db
 from models import User
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # Config
-SECRET_KEY = os.getenv("JWT_SECRET", "dev-secret")
+SECRET_KEY = os.getenv("JWT_SECRET")
+if not SECRET_KEY:
+    error_msg = (
+        "CRITICAL: JWT_SECRET environment variable is not set. "
+        "This is required for production. Generate a secure key using: "
+        "python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+    )
+    logger.error(error_msg)
+    raise ValueError(error_msg)
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
-# Warn if using default secret key
-if SECRET_KEY == "dev-secret":
-    logging.warning(
-        "Using default JWT_SECRET='dev-secret'. This is insecure for production. "
-        "Set the JWT_SECRET environment variable to a secure random value."
-    )
+# Validate token expiry settings
+if ACCESS_TOKEN_EXPIRE_MINUTES < 5:
+    logger.warning(f"ACCESS_TOKEN_EXPIRE_MINUTES is set to {ACCESS_TOKEN_EXPIRE_MINUTES}, which is very short")
+elif ACCESS_TOKEN_EXPIRE_MINUTES > 1440:  # 24 hours
+    logger.warning(f"ACCESS_TOKEN_EXPIRE_MINUTES is set to {ACCESS_TOKEN_EXPIRE_MINUTES}, which is quite long for security")
 
 
 def _prehash(password: str) -> bytes:
@@ -36,38 +51,102 @@ def _prehash(password: str) -> bytes:
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    # hashed_password is the bcrypt result (utf-8 string)
+    """
+    Verify a plain password against a hashed password.
+    
+    Args:
+        plain_password: The plain text password to verify
+        hashed_password: The bcrypt hashed password (utf-8 string)
+    
+    Returns:
+        bool: True if password matches, False otherwise
+    """
     try:
         ph = _prehash(plain_password)
         return bcrypt.checkpw(ph, hashed_password.encode("utf-8"))
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Password verification failed: {str(e)}")
         return False
 
 
 def get_password_hash(password: str) -> str:
+    """
+    Hash a password using bcrypt with SHA256 pre-hashing.
+    
+    Args:
+        password: The plain text password to hash
+    
+    Returns:
+        str: The bcrypt hashed password
+    """
+    if not password or len(password) < 8:
+        raise ValueError("Password must be at least 8 characters long")
+    
     ph = _prehash(password)
-    hashed = bcrypt.hashpw(ph, bcrypt.gensalt())
+    # Use cost factor of 12 for production (higher is more secure but slower)
+    hashed = bcrypt.hashpw(ph, bcrypt.gensalt(rounds=12))
     return hashed.decode("utf-8")
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """
+    Create a JWT access token.
+    
+    Args:
+        data: The data to encode in the token (typically {'sub': user_email})
+        expires_delta: Optional custom expiration time
+    
+    Returns:
+        str: The encoded JWT token
+    """
+    if not data or "sub" not in data:
+        raise ValueError("Token data must include 'sub' (subject) field")
+    
     to_encode = data.copy()
     now = datetime.now(timezone.utc)
+    
     if expires_delta:
         expire = now + expires_delta
     else:
         expire = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire, "iat": now})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    
+    to_encode.update({
+        "exp": expire,
+        "iat": now,
+        "nbf": now  # Not before - token is not valid before this time
+    })
+    
+    try:
+        encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+        return encoded_jwt
+    except Exception as e:
+        logger.error(f"Failed to create access token: {str(e)}")
+        raise
 
 
 def decode_access_token(token: str) -> dict:
-    # Will raise jose.JWTError subclasses on failure
-    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    return payload
+    """
+    Decode and validate a JWT access token.
+    
+    Args:
+        token: The JWT token string to decode
+    
+    Returns:
+        dict: The decoded token payload
+    
+    Raises:
+        JWTError: If token is invalid or expired
+    """
+    try:
+        # jwt.decode will automatically validate exp, iat, and nbf claims
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except JWTError as e:
+        logger.warning(f"Token decode failed: {str(e)}")
+        raise
 
-security = HTTPBearer()
+# HTTP Bearer security scheme
+security = HTTPBearer(auto_error=True)
 
 async def get_current_user(
         credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -75,34 +154,97 @@ async def get_current_user(
 ) -> User:
     """
     Resolve the currently authenticated user from the Bearer token.
-
-    Uses the 'sub' field in the JWT payload (we set it to the user's email in login).
+    
+    This dependency is used to protect routes that require authentication.
+    The JWT token must contain a 'sub' field with the user's email.
+    
+    Args:
+        credentials: The HTTP Bearer credentials containing the JWT token
+        db: The database session
+    
+    Returns:
+        User: The authenticated user object
+    
+    Raises:
+        HTTPException: If authentication fails for any reason
     """
     token = credentials.credentials
+    
+    # Validate token format
+    if not token or len(token) < 10:
+        logger.warning("Received invalid token format")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token format",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     try:
         payload = decode_access_token(token)
-        email = payload.get("sub")
-        if email is None:
+        email: Optional[str] = payload.get("sub")
+        
+        if not email:
+            logger.warning("Token missing 'sub' claim")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token: missing subject",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-    except JWTError:
+            
+        # Validate email format (basic check)
+        if "@" not in email or len(email) < 3:
+            logger.warning(f"Invalid email format in token: {email}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token: malformed subject",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            
+    except JWTError as e:
+        logger.warning(f"JWT validation failed: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalars().first()
-    if user is None:
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during token validation: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
+            detail="Authentication failed",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return user
+    # Query user from database
+    try:
+        result = await db.execute(select(User).where(User.email == email))
+        user = result.scalars().first()
+        
+        if user is None:
+            logger.warning(f"User not found for email: {email}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # Optional: Add additional checks here (e.g., is_active, is_verified)
+        # if hasattr(user, 'is_active') and not user.is_active:
+        #     logger.warning(f"Inactive user attempted access: {email}")
+        #     raise HTTPException(
+        #         status_code=status.HTTP_403_FORBIDDEN,
+        #         detail="User account is inactive",
+        #     )
+        
+        return user
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Database error during user lookup: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication service error",
+        )
