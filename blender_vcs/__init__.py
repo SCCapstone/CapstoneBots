@@ -19,7 +19,7 @@ class BVCSAddonPreferences(bpy.types.AddonPreferences):
 
     api_url: bpy.props.StringProperty(
         name="API URL",
-        default="http://localhost:8000",
+        default="https://capstonebots-production.up.railway.app" or "http://localhost:8000",
     )
     auth_token: bpy.props.StringProperty(
         name="JWT Token",

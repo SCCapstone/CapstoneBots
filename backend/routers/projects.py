@@ -81,7 +81,7 @@ async def get_projects(
     result = await db.execute(query)
     return result.scalars().all()
 
-@router.post("/", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_project(
         project: ProjectCreate,
         db: AsyncSession = Depends(get_db),
