@@ -39,7 +39,7 @@ router = APIRouter()
 
 # ============== Project Routes ==============
 
-@router.get("/", response_model=List[ProjectResponse])
+@router.get("", response_model=List[ProjectResponse])
 async def get_projects(
         db: AsyncSession = Depends(get_db),
         current_user: User = Depends(get_current_user),
