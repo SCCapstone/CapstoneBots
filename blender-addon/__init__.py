@@ -10,7 +10,6 @@ bl_info = {
 
 import bpy
 import requests
-from uuid import uuid4
 
 BL_ID = "blender_vcs"
 
