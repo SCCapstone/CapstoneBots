@@ -6,16 +6,14 @@ from minio.error import S3Error
 import datetime
 
 client = Minio(
-    "localhost:9000",
-    access_key="minioadmin",
-    secret_key="minioadmin",
-    secure=False
+    endpoint=os.environ["S3_ENDPOINT"].replace("https://", "").replace("http://", ""),
+    access_key=os.environ["S3_ACCESS_KEY"],
+    secret_key=os.environ["S3_SECRET_KEY"],
+    secure=os.environ.get("S3_SECURE", "true").lower() == "true",
+    region=os.environ.get("S3_REGION"),
 )
 
-BUCKET_NAME = "blender-vcs"
-
-if not client.bucket_exists(BUCKET_NAME):
-    client.make_bucket(BUCKET_NAME)
+BUCKET_NAME = os.environ["S3_BUCKET"]
 
 def upload_file(local_path: str, object_name: str):
     client.fput_object(BUCKET_NAME, object_name, local_path)
