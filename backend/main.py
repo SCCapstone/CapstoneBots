@@ -1,15 +1,16 @@
 import sys
 import os
 
-# Add the current directory to sys.path to allow imports from the same directory
+# Add the current directory to sys.path to allow imports from this folder
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from routers import projects, users
+from routers import projects, users #, locks
 from database import init_db, close_db
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -20,6 +21,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     await close_db()
     print("Database connection closed")
+
 
 app = FastAPI(
     title="CapstoneBots API",
@@ -41,14 +43,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
     return {"status": "ok", "service": "CapstoneBots API"}
 
+
 # Include routers
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(users.router, prefix="/api/auth", tags=["auth"])
+#app.include_router(locks.router, prefix="/api/locks", tags=["locks"])
+
 
 if __name__ == "__main__":
     import uvicorn

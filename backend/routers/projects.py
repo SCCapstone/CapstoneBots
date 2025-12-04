@@ -290,8 +290,9 @@ async def get_project_branches(
 @router.post("/{project_id}/branches", response_model=BranchResponse, status_code=status.HTTP_201_CREATED)
 async def create_branch(
     project_id: UUID,
-    branch: BranchCreate,
-    db: AsyncSession = Depends(get_db)
+    req: BranchCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a new branch in a project (similar to 'git branch <name>').
@@ -320,17 +321,21 @@ async def create_branch(
     """
     # Verify the project exists before creating a branch
     project = await db.get(Project, project_id)
-    if not project:
+    if not project or project.owner_id != current_user.user_id:
         raise HTTPException(status_code=404, detail="Project not found")
+
     
     # Create new branch within the project
     new_branch = Branch(
         project_id=project_id,
-        **branch.dict()  # Unpack branch_name and created_by
+        branch_name=req.name,                 # map name -> branch_name
+        parent_branch_id=req.parent_branch_id,
+        created_by=current_user.user_id,      # use auth user, NOT request body
     )
     db.add(new_branch)
     await db.commit()
-    await db.refresh(new_branch)  # Get generated branch_id
+    await db.refresh(new_branch)
+
     return new_branch
 
 # ============== Commit Routes ==============
@@ -389,8 +394,9 @@ async def get_commit_history(
 @router.post("/{project_id}/commits", response_model=CommitResponse, status_code=status.HTTP_201_CREATED)
 async def create_commit(
     project_id: UUID,
-    data: CommitCreateRequest,
-    db: AsyncSession = Depends(get_db)
+    data: CommitCreateRequest,  # <- use the request model with branch_id, commit_message, objects
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a new commit with Blender objects (similar to 'git commit').
@@ -406,7 +412,7 @@ async def create_commit(
     
     Args:
         project_id: UUID of the project
-        data: CommitCreateRequest with branch_id, author_id, message, and objects
+        data: CommitCreateRequest with branch_id, message, and objects
         db: Database session dependency
         
     Returns:
@@ -414,60 +420,76 @@ async def create_commit(
         
     Raises:
         HTTPException 404: If branch doesn't exist
-        
-    Example:
-        POST /api/projects/123e4567-e89b-12d3-a456-426614174000/commits
-        {
-            "branch_id": "branch-uuid",
-            "author_id": "user-id",
-            "commit_message": "Updated cube material",
-            "objects": [
-                {
-                    "object_name": "Cube",
-                    "object_type": "MESH",
-                    "file_path": "s3://bucket/cube.blend"
-                }
-            ]
-        }
+        HTTPException 423: If any object being committed is locked by another user
     """
+
     # Verify the branch exists
     branch = await db.get(Branch, data.branch_id)
-    if not branch:
+    if not branch or branch.project_id != project_id:
         raise HTTPException(status_code=404, detail="Branch not found")
+
+    # ============================
+    # Enforce object locks (Issue #33)
+    # ============================
+    for obj_data in data.objects:
+        obj_name = obj_data.object_name
+
+        lock_query = (
+            select(ObjectLock)
+            .where(
+                ObjectLock.project_id == project_id,
+                ObjectLock.object_name == obj_name,
+                ObjectLock.branch_id == data.branch_id,
+            )
+        )
+        lock_result = await db.execute(lock_query)
+        lock = lock_result.scalar_one_or_none()
+
+        if lock and lock.expires_at and lock.expires_at < datetime.utcnow():
+            await db.delete(lock)
+            await db.commit()
+            lock = None
+
+        if lock and lock.locked_by != current_user.user_id:
+            raise HTTPException(
+                status_code=423,
+                detail=f"Object '{obj_name}' is locked by another user.",
+            )
     
     # Generate unique commit hash using SHA256
-    # Combines project, branch, author, message, and timestamp for uniqueness
-    commit_content = f"{project_id}{data.branch_id}{data.author_id}{data.commit_message}{datetime.utcnow()}"
+    now = datetime.utcnow()
+    commit_content = (
+        f"{project_id}{data.branch_id}{current_user.user_id}"
+        f"{data.commit_message}{now.isoformat()}"
+    )
     commit_hash = hashlib.sha256(commit_content.encode()).hexdigest()
     
     # Create the commit record
     new_commit = Commit(
         project_id=project_id,
         branch_id=data.branch_id,
-        parent_commit_id=branch.head_commit_id,  # Link to previous commit (building history chain)
-        author_id=data.author_id,
+        parent_commit_id=branch.head_commit_id,
+        author_id=current_user.user_id,
         commit_message=data.commit_message,
         commit_hash=commit_hash,
-        committed_at=datetime.utcnow()
+        committed_at=now,
     )
     db.add(new_commit)
-    await db.flush()  # Get commit_id without committing yet
+    await db.flush()
     
     # Add all Blender objects that are part of this commit
-    # Each object contains file paths, metadata, and transformation data
     for obj_data in data.objects:
         blender_obj = BlenderObject(
             commit_id=new_commit.commit_id,
-            **obj_data.dict()  # Unpack object_name, object_type, file_path, etc.
+            **obj_data.dict()
         )
         db.add(blender_obj)
     
-    # Update the branch HEAD pointer to this new commit (move branch forward)
-    # This makes the new commit the latest version on this branch
+    # Update the branch HEAD pointer to this new commit
     branch.head_commit_id = new_commit.commit_id
     
-    await db.commit()  # Commit transaction with all objects and branch update
-    await db.refresh(new_commit)  # Refresh to get all generated fields
+    await db.commit()
+    await db.refresh(new_commit)
     return new_commit
 
 @router.get("/{project_id}/commits/{commit_id}/objects", response_model=List[BlenderObjectResponse])
@@ -570,7 +592,8 @@ async def get_object_locks(
 async def lock_object(
     project_id: UUID,
     lock_data: ObjectLockCreate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Lock a Blender object to prevent concurrent edits.
@@ -584,7 +607,7 @@ async def lock_object(
     
     Args:
         project_id: UUID of the project
-        lock_data: ObjectLockCreate with object_name, locked_by, branch_id, expires_at
+        lock_data: ObjectLockCreate with object_name, branch_id, expires_at
         db: Database session dependency
         
     Returns:
@@ -597,7 +620,6 @@ async def lock_object(
         POST /api/projects/123e4567-e89b-12d3-a456-426614174000/locks
         {
             "object_name": "Cube",
-            "locked_by": "user-id",
             "branch_id": "branch-uuid",
             "expires_at": "2025-12-02T16:00:00"
         }
@@ -609,24 +631,24 @@ async def lock_object(
         .where(
             ObjectLock.project_id == project_id,
             ObjectLock.object_name == lock_data.object_name,
-            ObjectLock.branch_id == lock_data.branch_id
+            ObjectLock.branch_id == lock_data.branch_id,
         )
     )
     result = await db.execute(existing_lock)
     if result.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Object is already locked")
-    
+
     # Create the lock record
     new_lock = ObjectLock(
         project_id=project_id,
         object_name=lock_data.object_name,
-        locked_by=lock_data.locked_by,
+        locked_by=current_user.user_id,  # Infer from auth token
         branch_id=lock_data.branch_id,
-        expires_at=lock_data.expires_at  # Auto-release after expiration
+        expires_at=lock_data.expires_at,
     )
     db.add(new_lock)
     await db.commit()
-    await db.refresh(new_lock)  # Get generated lock_id
+    await db.refresh(new_lock)
     return new_lock
 
 @router.delete("/{project_id}/locks/{lock_id}", status_code=status.HTTP_204_NO_CONTENT)
