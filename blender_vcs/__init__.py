@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 try:
     import boto3
     from botocore.exceptions import BotoCoreError, ClientError
+    from botocore.config import Config as BotocoreConfig
     HAS_BOTO3 = True
 except Exception:
     HAS_BOTO3 = False
@@ -59,20 +60,20 @@ class BVCSAddonPreferences(bpy.types.AddonPreferences):
     # S3 fields
     s3_access_key: bpy.props.StringProperty(
         name="S3 Access Key",
-        default="",
+        default="AKIA2MNVLT6HJRJPXUGK",
     )
     s3_secret_key: bpy.props.StringProperty(
         name="S3 Secret Key",
-        default="",
+        default="kcy+o+iELjAtz4RHlZTve3P8EJbtxSrfdy6UA6jl",
         subtype='PASSWORD'
     )
     s3_bucket: bpy.props.StringProperty(
         name="S3 Bucket",
-        default="",
+        default="blender-vcs-prod",
     )
     s3_endpoint: bpy.props.StringProperty(
         name="S3 Endpoint",
-        default="",  # optional - e.g. https://s3.us-east-1.amazonaws.com
+        default="",  # optional
     )
     s3_region: bpy.props.StringProperty(
         name="S3 Region",
@@ -169,7 +170,7 @@ def make_s3_client(prefs):
     access_key = prefs.s3_access_key or os.environ.get("S3_ACCESS_KEY") or os.environ.get("AWS_ACCESS_KEY_ID")
     secret_key = prefs.s3_secret_key or os.environ.get("S3_SECRET_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY")
     bucket = prefs.s3_bucket or os.environ.get("S3_BUCKET")
-    endpoint = prefs.s3_endpoint or os.environ.get("S3_ENDPOINT")
+    endpoint = prefs.s3_endpoint or os.environ.get("S3_ENDPOINT") or None
     region = prefs.s3_region or os.environ.get("S3_REGION", "us-east-1")
     secure = prefs.s3_secure
 
@@ -179,14 +180,20 @@ def make_s3_client(prefs):
     if not access_key or not secret_key or not bucket:
         return None, "S3 credentials or bucket not configured in preferences or environment."
 
-    session = boto3.session.Session()
-    s3_client = session.client(
-        service_name='s3',
-        region_name=region,
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        endpoint_url=endpoint if endpoint else None,
-        config=boto3.session.Config(signature_version='s3v4'))
+    try:
+        session = boto3.session.Session()
+        # Use botocore Config for signature_version and retries
+        botocore_conf = BotocoreConfig(signature_version='s3v4')
+        s3_client = session.client(
+            service_name='s3',
+            region_name=region,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            endpoint_url=endpoint if endpoint else None,
+            config=botocore_conf
+        )
+    except Exception as e:
+        return None, f"Failed to create S3 client: {e}"
 
     return {
         "client": s3_client,
@@ -247,6 +254,24 @@ def upload_folder_to_s3(folder, bucket, s3_key, client):
     except Exception as e:
         logger.error(f"Failed to upload folder to S3: {e}")
         return False
+    
+def upload_file_to_s3(local_file_path, bucket, s3_key_prefix, client):
+    """
+    Upload a single file to S3.
+    local_file_path: path to the local file
+    bucket: S3 bucket name
+    s3_key_prefix: prefix/folder in the bucket (e.g. 'projectid_timestamp')
+    client: boto3 s3 client
+    """
+    try:
+        filename = os.path.basename(local_file_path)
+        s3_key = os.path.join(s3_key_prefix, filename).replace("\\", "/")
+        client.upload_file(local_file_path, bucket, s3_key)
+        logger.info(f"Uploaded {local_file_path} to s3://{bucket}/{s3_key}")
+        return s3_key  # return S3 key used
+    except Exception as e:
+        logger.error(f"Failed to upload file to S3: {e}")
+        return None
 
 # ---------------- Operators ----------------
 class BVCS_OT_Login(bpy.types.Operator):
@@ -369,6 +394,7 @@ def get_user_projects(context):
     except Exception as e:
         logger.error(f"Failed to fetch projects: {e}")
         return []
+    
 
 # ---------------- Stage Objects ----------------
 class BVCS_OT_StageObjects(bpy.types.Operator):
@@ -459,14 +485,22 @@ class BVCS_OT_RefreshS3(bpy.types.Operator):
     bl_idname = "bvcs.refresh_s3"
     bl_label = "Refresh S3 Credentials"
 
-    def execute(self, context):
-        prefs = get_prefs(context)
-        if not prefs.auth_token:
-            self.report({'ERROR'}, "Not logged in")
-            return {'CANCELLED'}
-        fetch_user_s3_credentials(prefs)
-        self.report({'INFO'}, "S3 credentials refreshed")
-        return {'FINISHED'}
+def execute(self, context):
+    prefs = get_prefs(context)
+    if not prefs.auth_token:
+        self.report({'ERROR'}, "Not logged in")
+        return {'CANCELLED'}
+    fetch_user_s3_credentials(prefs)
+
+    # Force Blender preferences UI to refresh so new values are visible
+    try:
+        context.preferences.is_dirty = True
+    except Exception:
+        # non-fatal; just continue
+        pass
+
+    self.report({'INFO'}, "S3 credentials refreshed")
+    return {'FINISHED'}
 
 # ---------------- Push / Pull / Conflicts ----------------
 class BVCS_OT_Push(bpy.types.Operator):
@@ -506,19 +540,14 @@ class BVCS_OT_Push(bpy.types.Operator):
         s3_folder_name = f"{prefs.project_id}_{timestamp}"
         
         try:
-            # Step 1: Upload .blend file and dependencies to S3
-            self.report({'INFO'}, "Gathering dependencies...")
-            package_dir = gather_dependencies(local_file_path)
-            
-            self.report({'INFO'}, "Uploading to S3...")
-            success = upload_folder_to_s3(package_dir, bucket, s3_folder_name, client)
-            
-            # Clean up: remove the temporary package directory after upload
-            shutil.rmtree(package_dir)
-            
-            if not success:
-                self.report({'ERROR'}, "Failed to upload to S3")
+            # Step 1: Upload only the .blend file to S3
+            self.report({'INFO'}, "Uploading .blend to S3...")
+            s3_key = upload_file_to_s3(local_file_path, bucket, s3_folder_name, client)
+            if not s3_key:
+                self.report({'ERROR'}, "Failed to upload .blend file to S3")
                 return {'CANCELLED'}
+            # Build the s3 path used in DB (s3://bucket/<s3_key>)
+            s3_blend_path = f"s3://{bucket}/{s3_key}"
             
             # Step 2: Get current user for author_id
             user = get_logged_in_user(prefs)
@@ -598,108 +627,74 @@ class BVCS_OT_Push(bpy.types.Operator):
 
 class BVCS_OT_PullProject(bpy.types.Operator):
     bl_idname = "bvcs.pull_project"
-    bl_label = "Pull Latest from Database and S3"
+    bl_label = "Pull Latest from S3 (Ignore DB)"
 
     def execute(self, context):
         prefs = get_prefs(context)
         if not prefs.project_id:
             self.report({'ERROR'}, "No project selected")
             return {'CANCELLED'}
-        
+
+        wm = context.window_manager
+
+        last_push = wm.get("bvcs_last_pushed")
+        if not last_push:
+            self.report({'ERROR'}, "No previous push found")
+            return {'CANCELLED'}
+
+        bucket = last_push.get("bucket")
+        folder = last_push.get("folder")
+        if not bucket or not folder:
+            self.report({'ERROR'}, "Invalid last push info")
+            return {'CANCELLED'}
+
+        # Ensure S3 client is initialized
+        s3_info, err = make_s3_client(prefs)
+        if err:
+            self.report({'ERROR'}, f"S3 error: {err}")
+            return {'CANCELLED'}
+        client = s3_info["client"]
+
         try:
-            # Step 1: Get latest commit from database
-            headers = {"Authorization": f"Bearer {prefs.auth_token}"}
-            self.report({'INFO'}, "Fetching commit history...")
-            commits_resp = requests.get(
-                f"{prefs.api_url}/api/projects/{prefs.project_id}/commits",
-                headers=headers,
-                timeout=10
-            )
-            commits_resp.raise_for_status()
-            commits = commits_resp.json()
-            
-            if not commits:
-                self.report({'ERROR'}, "No commits found for this project")
+            # List objects in the folder
+            response = client.list_objects_v2(Bucket=bucket, Prefix=folder + "/")
+            if "Contents" not in response:
+                self.report({'ERROR'}, "No files found in last push S3 folder")
                 return {'CANCELLED'}
-            
-            # Get the most recent commit
-            latest_commit = commits[0]
-            commit_id = latest_commit.get("commit_id")
-            
-            # Step 2: Get objects from this commit
-            self.report({'INFO'}, "Fetching commit objects...")
-            objects_resp = requests.get(
-                f"{prefs.api_url}/api/projects/{prefs.project_id}/commits/{commit_id}/objects",
-                headers=headers,
-                timeout=10
-            )
-            objects_resp.raise_for_status()
-            objects = objects_resp.json()
-            
-            if not objects:
-                self.report({'ERROR'}, "No objects found in commit")
-                return {'CANCELLED'}
-            
-            # Step 3: Download .blend file from S3
-            s3_info, err = make_s3_client(prefs)
-            if err:
-                self.report({'ERROR'}, f"S3 error: {err}")
-                return {'CANCELLED'}
-            
-            client = s3_info["client"]
-            
-            # Find the main .blend file object
-            blend_obj = next((obj for obj in objects if obj.get("object_type") == "BLEND_FILE"), None)
+
+            # Find the main .blend file
+            blend_obj = next((o for o in response["Contents"] if o["Key"].endswith(".blend")), None)
             if not blend_obj:
-                self.report({'ERROR'}, "No .blend file found in commit")
+                self.report({'ERROR'}, "No .blend file found in last push")
                 return {'CANCELLED'}
-            
-            # Parse S3 path (format: s3://bucket/path/to/file)
-            s3_path = blend_obj.get("json_data_path")
-            if not s3_path or not s3_path.startswith("s3://"):
-                self.report({'ERROR'}, "Invalid S3 path in commit")
-                return {'CANCELLED'}
-            
-            # Extract bucket and key from s3:// URL
-            s3_parts = s3_path.replace("s3://", "").split("/", 1)
-            if len(s3_parts) != 2:
-                self.report({'ERROR'}, "Could not parse S3 path")
-                return {'CANCELLED'}
-            
-            bucket, key = s3_parts
-            
-            # Download the file
-            self.report({'INFO'}, f"Downloading from S3...")
+
+            # Download to temp folder
             temp_dir = os.path.join(tempfile.gettempdir(), "bvcs_pull")
             os.makedirs(temp_dir, exist_ok=True)
-            local_path = os.path.join(temp_dir, os.path.basename(key))
-            
-            client.download_file(bucket, key, local_path)
-            
-            # Step 4: Open the downloaded file in Blender
-            self.report({'INFO'}, "Opening file...")
-            bpy.ops.wm.open_mainfile(filepath=local_path)
-            
-            context.window_manager["bvcs_last_pulled"] = {
-                "commit_id": commit_id,
-                "commit_hash": latest_commit.get("commit_hash"),
-                "commit_message": latest_commit.get("commit_message"),
-                "s3_path": s3_path,
+            local_path = os.path.join(temp_dir, os.path.basename(blend_obj["Key"]))
+
+            self.report({'INFO'}, f"Downloading {blend_obj['Key']} from S3...")
+            client.download_file(bucket, blend_obj["Key"], local_path)
+
+            # Save last pulled info BEFORE opening file
+            wm["bvcs_last_pulled"] = {
+                "commit_id": last_push.get("commit_id"),
+                "commit_hash": last_push.get("commit_hash"),
                 "pulled_at": datetime.now(timezone.utc).isoformat()
             }
-            
-            logger.info(f"Pulled commit {latest_commit.get('commit_hash')} from database and S3")
-            self.report({'INFO'}, f"Successfully pulled: {latest_commit.get('commit_message')}")
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to pull from database: {e}")
-            self.report({'ERROR'}, f"Database error: {e}")
-            return {'CANCELLED'}
+
+            # Open the downloaded file
+            self.report({'INFO'}, "Opening file...")
+            bpy.ops.wm.open_mainfile(filepath=local_path)
+
+            self.report({'INFO'}, f"Successfully pulled: {os.path.basename(local_path)}")
+            logger.info(f"Pulled commit {last_push.get('commit_hash')} from S3")
+
         except Exception as e:
-            logger.error(f"Failed to pull: {e}")
+            logger.error(f"Failed to pull from S3: {e}")
             self.report({'ERROR'}, f"Pull failed: {e}")
             return {'CANCELLED'}
-            
+
         return {'FINISHED'}
 
 class BVCS_OT_CheckConflicts(bpy.types.Operator):
