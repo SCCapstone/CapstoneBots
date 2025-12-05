@@ -60,20 +60,20 @@ class BVCSAddonPreferences(bpy.types.AddonPreferences):
     # S3 fields
     s3_access_key: bpy.props.StringProperty(
         name="S3 Access Key",
-        default="AKIA2MNVLT6HJRJPXUGK",
+        default="",
     )
     s3_secret_key: bpy.props.StringProperty(
         name="S3 Secret Key",
-        default="kcy+o+iELjAtz4RHlZTve3P8EJbtxSrfdy6UA6jl",
+        default="",
         subtype='PASSWORD'
     )
     s3_bucket: bpy.props.StringProperty(
         name="S3 Bucket",
-        default="blender-vcs-prod",
+        default="",
     )
     s3_endpoint: bpy.props.StringProperty(
         name="S3 Endpoint",
-        default="",  # optional
+        default="",
     )
     s3_region: bpy.props.StringProperty(
         name="S3 Region",
