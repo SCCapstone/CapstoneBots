@@ -5,7 +5,7 @@ import {useParams, useRouter} from "next/navigation";
 import Link from "next/link";
 import {useAuth} from "@/components/AuthProvider";
 import type {Commit, Project} from "@/lib/projectsApi";
-import {deleteProject, fetchCommits, fetchProjects} from "@/lib/projectsApi";
+import {deleteProject, fetchCommits, fetchProjects, fetchCommitObjects} from "@/lib/projectsApi";
 import {fetchCurrentUser} from "@/lib/authApi";
 
 function formatCommitDate(dateString: string): string {
@@ -42,45 +42,6 @@ type FileRow = {
   updatedAt: string;
 };
 
-// Temporary mock data – replace with real file API later
-const mockFiles: FileRow[] = [
-  {
-    id: "1",
-    name: "assets",
-    type: "folder",
-    lastCommit: '"Added new rock and tree models"',
-    updatedAt: "1 day ago",
-  },
-  {
-    id: "2",
-    name: "scenes",
-    type: "folder",
-    lastCommit: '"Initial setup for the main scene"',
-    updatedAt: "5 days ago",
-  },
-  {
-    id: "3",
-    name: "character_model.blend",
-    type: "file",
-    lastCommit: '"Fixed rigging issue on left arm"',
-    updatedAt: "2 hours ago",
-  },
-  {
-    id: "4",
-    name: "uv_layout.png",
-    type: "file",
-    lastCommit: '"Updated UV map for character clothing"',
-    updatedAt: "3 days ago",
-  },
-  {
-    id: "5",
-    name: "README.md",
-    type: "file",
-    lastCommit: '"Initial project description"',
-    updatedAt: "1 week ago",
-  },
-];
-
 export default function ProjectPage() {
   const router = useRouter();
   const params = useParams<{ projectId: string }>();
@@ -101,6 +62,11 @@ export default function ProjectPage() {
   const [commitsLoading, setCommitsLoading] = useState(false);
   const [commitsError, setCommitsError] = useState("");
   const commitCount = commits.length; // will be 0 until we load
+
+  // 🔹 Files state (real data)
+  const [files, setFiles] = useState<FileRow[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+
 
   // Load project name so we can show "Project Alpha" style headings
   useEffect(() => {
@@ -146,6 +112,54 @@ export default function ProjectPage() {
     };
 
     loadCommits();
+  }, [token, projectId]);
+
+  useEffect(() => {
+    if (!token || !projectId) return;
+
+    const loadCommitsAndFiles = async () => {
+      setCommitsLoading(true);
+      setCommitsError("");
+      setFilesLoading(true);
+
+      try {
+        // 1) Load commits (with usernames)
+        const data = await loadCommitsWithUsers(token, projectId);
+        setCommits(data);
+
+        // 2) If we have at least one commit, fetch its objects as "files"
+        if (data.length > 0) {
+          const latest = data[0]; // newest commit (API already orders newest first:contentReference[oaicite:1]{index=1})
+          const objects = await fetchCommitObjects(
+            token,
+            projectId,
+            latest.commit_id
+          );
+
+          const rows: FileRow[] = objects.map((obj) => ({
+            id: obj.object_id,
+            name: obj.object_name,
+            // treat COLLECTION as "folder", everything else as "file" for now
+            type: obj.object_type === "COLLECTION" ? "folder" : "file",
+            lastCommit: `"${latest.commit_message}"`,
+            updatedAt: formatCommitDate(latest.committed_at),
+          }));
+
+          setFiles(rows);
+        } else {
+          // No commits => no files
+          setFiles([]);
+        }
+      } catch (err: any) {
+        setCommitsError(err?.message || "Failed to load commits.");
+        setFiles([]);
+      } finally {
+        setCommitsLoading(false);
+        setFilesLoading(false);
+      }
+    };
+
+    loadCommitsAndFiles();
   }, [token, projectId]);
 
   const displayName =
@@ -264,41 +278,51 @@ export default function ProjectPage() {
           </div>
 
           {/* Rows */}
+          {/* Rows */}
           <div className="divide-y divide-slate-800">
-            {mockFiles.map((file) => (
-              <div
-                key={file.id}
-                className="grid grid-cols-3 items-center px-4 py-2 hover:bg-slate-900"
-              >
-                {/* Name + icon */}
-                <div className="flex items-center gap-2 text-slate-100">
-                  <span
-                    className={`flex h-4 w-4 items-center justify-center rounded-sm ${
-                      file.type === "folder"
-                        ? "bg-yellow-500/20 text-yellow-300"
-                        : "bg-slate-700/60 text-slate-300"
-                    }`}
-                  >
-                    {file.type === "folder" ? "▣" : "▤"}
-                  </span>
-                  <span className="truncate">{file.name}</span>
-                </div>
-
-                {/* Last commit message */}
-                <div className="truncate text-slate-400">
-                  {file.lastCommit}
-                </div>
-
-                {/* Updated at */}
-                <div className="text-right text-slate-500">
-                  {file.updatedAt}
-                </div>
+            {filesLoading ? (
+              <div className="px-4 py-3 text-xs text-slate-400">
+                Loading files...
               </div>
-            ))}
-          </div>
-        </div>
+            ) : files.length === 0 ? (
+              <div className="px-4 py-3 text-xs text-slate-500">
+                No files yet for this project.
+              </div>
+            ) : (
+              files.map((file) => (
+                <div
+                  key={file.id}
+                  className="grid grid-cols-3 items-center px-4 py-2 hover:bg-slate-900"
+                >
+                  {/* Name + icon */}
+                  <div className="flex items-center gap-2 text-slate-100">
+          <span
+            className={`flex h-4 w-4 items-center justify-center rounded-sm ${
+              file.type === "folder"
+                ? "bg-yellow-500/20 text-yellow-300"
+                : "bg-slate-700/60 text-slate-300"
+            }`}
+          >
+            {file.type === "folder" ? "▣" : "▤"}
+          </span>
+                    <span className="truncate">{file.name}</span>
+                  </div>
 
-        {error && (
+                  {/* Last commit message */}
+                  <div className="truncate text-slate-400">
+                    {file.lastCommit}
+                  </div>
+
+                  {/* Updated at */}
+                  <div className="text-right text-slate-500">
+                    {file.updatedAt}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {error && (
           <p className="text-[11px] text-red-400">{error}</p>
         )}
       </div>
@@ -419,6 +443,7 @@ export default function ProjectPage() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </div>  
   );
 }

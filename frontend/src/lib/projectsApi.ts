@@ -30,6 +30,14 @@ export type ProjectCreatePayload = {
   active?: boolean;
 };
 
+export interface BlenderObject {
+  object_id: string;
+  object_name: string;
+  object_type: string;
+  file_path: string;
+  commit_id: string;
+};
+
 async function handleProjectError(res: Response, context: string) {
   let message = `${context} failed: ${res.status}`;
 
@@ -137,16 +145,24 @@ export async function fetchCommits(
   return res.json();
 }
 
-export async function fetchUserById(token: string, userId: string) {
-  const res = await fetch(`${API_BASE}/api/auth/me/${userId}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
+export async function fetchCommitObjects(
+  token: string,
+  projectId: string,
+  commitId: string
+): Promise<BlenderObject[]> {
+  const res = await fetch(
+    `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/projects/${projectId}/commits/${commitId}/objects`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+    }
+  );
 
   if (!res.ok) {
-    throw new Error(`Failed to fetch user: ${res.status}`);
+    throw new Error("Failed to fetch commit objects");
   }
 
-  return res.json(); // { username, email, ... }
+  return res.json();
 }
