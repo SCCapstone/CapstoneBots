@@ -10,12 +10,8 @@ bl_info = {
 
 import bpy
 import requests
-import json
-import hashlib
-import base64
-from uuid import uuid4
 
-BL_ID = "blender_vcs"
+BL_ID = "blender_addon"
 
 # ---------------- Preferences ----------------
 class BVCSAddonPreferences(bpy.types.AddonPreferences):
@@ -40,6 +36,7 @@ class BVCSAddonPreferences(bpy.types.AddonPreferences):
         layout.prop(self, "auth_token")
         layout.prop(self, "project_id")
 
+
 # ---------------- Helpers ----------------
 def get_prefs(context):
     prefs_container = context.preferences.addons.get(BL_ID)
@@ -47,12 +44,14 @@ def get_prefs(context):
         raise RuntimeError("BVCS preferences not found")
     return prefs_container.preferences
 
+
 def get_bvcs_login_state():
     wm = bpy.context.window_manager
     if "bvcs_logged_in" not in wm:
         prefs = get_prefs(bpy.context)
         wm["bvcs_logged_in"] = bool(prefs.auth_token)
     return wm
+
 
 def normalize_user_dict(user: dict) -> dict:
     if not isinstance(user, dict):
@@ -64,17 +63,21 @@ def normalize_user_dict(user: dict) -> dict:
             user["user_id"] = user["userId"]
     return user
 
+
 def get_logged_in_user(prefs):
     if not prefs or not getattr(prefs, "auth_token", None):
         return None
     headers = {"Authorization": f"Bearer {prefs.auth_token}"}
     try:
+        # Call the backend's /api/auth/me endpoint.
+        # This endpoint returns the CURRENT USER based only on the JWT token.
         resp = requests.get(f"{prefs.api_url}/api/auth/me", headers=headers, timeout=5)
         resp.raise_for_status()
         user = resp.json()
         return normalize_user_dict(user)
     except Exception:
         return None
+
 
 # ---------------- Operators ----------------
 class BVCS_OT_Login(bpy.types.Operator):
@@ -88,6 +91,7 @@ class BVCS_OT_Login(bpy.types.Operator):
         prefs = get_prefs(context)
         url = f"{prefs.api_url}/api/auth/login"
         try:
+            # Send login request to the backend with email + password
             resp = requests.post(url, json={"email": self.email, "password": self.password}, timeout=5)
             if resp.status_code == 200:
                 token = resp.json().get("access_token") or resp.json().get("token")
@@ -107,6 +111,7 @@ class BVCS_OT_Login(bpy.types.Operator):
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
 
+
 class BVCS_OT_Logout(bpy.types.Operator):
     bl_idname = "bvcs.logout"
     bl_label = "Logout"
@@ -119,6 +124,7 @@ class BVCS_OT_Logout(bpy.types.Operator):
         wm["bvcs_logged_in"] = False
         self.report({'INFO'}, "Logged out")
         return {'FINISHED'}
+
 
 class BVCS_OT_CreateProject(bpy.types.Operator):
     bl_idname = "bvcs.create_project"
@@ -159,6 +165,7 @@ class BVCS_OT_CreateProject(bpy.types.Operator):
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
 
+
 class BVCS_OT_SelectProject(bpy.types.Operator):
     bl_idname = "bvcs.select_project"
     bl_label = "Open Existing Project"
@@ -178,6 +185,7 @@ class BVCS_OT_SelectProject(bpy.types.Operator):
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
 
+
 def get_user_projects(self, context):
     prefs = get_prefs(context)
     headers = {"Authorization": f"Bearer {prefs.auth_token}"}
@@ -188,6 +196,7 @@ def get_user_projects(self, context):
         return [(str(p["project_id"]), p["name"], p.get("description", "")) for p in projects]
     except Exception:
         return []
+
 
 # ---------------- Stage Objects ----------------
 class BVCS_OT_StageObjects(bpy.types.Operator):
@@ -202,79 +211,13 @@ class BVCS_OT_StageObjects(bpy.types.Operator):
             self.report({'ERROR'}, "No objects selected")
             return {'CANCELLED'}
 
+        # Store list on class
         BVCS_OT_StageObjects.staged_objects = [obj.name for obj in selected_objects]
 
         self.report({'INFO'}, f"Staged {len(selected_objects)} objects")
         print("[BVCS] STAGED OBJECTS:", BVCS_OT_StageObjects.staged_objects)
 
         return {'FINISHED'}
-
-# ---------------- Commit ----------------
-class BVCS_OT_Commit(bpy.types.Operator):
-    bl_idname = "bvcs.commit"
-    bl_label = "Commit Staged Objects"
-
-    commit_message: bpy.props.StringProperty(name="Commit Message", default="Updated objects")
-
-    def execute(self, context):
-        prefs = get_prefs(context)
-        if not prefs.project_id:
-            self.report({'ERROR'}, "No project selected")
-            return {'CANCELLED'}
-
-        staged = BVCS_OT_StageObjects.staged_objects
-        if not staged:
-            self.report({'ERROR'}, "No staged objects to commit")
-            return {'CANCELLED'}
-
-        objects_data = []
-        for obj_name in staged:
-            obj = bpy.data.objects.get(obj_name)
-            if not obj:
-                continue
-
-            # JSON metadata
-            json_data = {
-                "name": obj.name,
-                "type": obj.type
-            }
-
-            # Mesh data encoded as Base64
-            mesh_base64 = None
-            if obj.type == 'MESH':
-                try:
-                    mesh_list = [[v.co.x, v.co.y, v.co.z] for v in obj.data.vertices]
-                    mesh_bytes = json.dumps(mesh_list).encode()
-                    mesh_base64 = base64.b64encode(mesh_bytes).decode('utf-8')
-                except Exception as e:
-                    print(f"[BVCS] Failed to encode mesh for {obj.name}: {e}")
-
-            # Blob hash
-            blob_hash = hashlib.sha256(json.dumps(json_data, sort_keys=True).encode()).hexdigest()
-
-            objects_data.append({
-                "object_name": obj.name,
-                "object_type": obj.type,
-                "json_data": json_data,
-                "mesh_data": mesh_base64,
-                "blob_hash": blob_hash
-            })
-
-        commit_data = {
-            "branch_id": "default",  # adjust for your branch system
-            "author_id": str(uuid4()),  # placeholder
-            "commit_message": self.commit_message,
-            "objects": objects_data
-        }
-
-        print("[BVCS] COMMIT DATA:", json.dumps(commit_data, indent=2))
-        self.report({'INFO'}, "Commit prepared (Base64 mesh)")
-
-        bpy.context.window_manager["bvcs_last_commit"] = commit_data
-        return {'FINISHED'}
-
-    def invoke(self, context, event):
-        return context.window_manager.invoke_props_dialog(self)
 
 # ---------------- Push ----------------
 class BVCS_OT_Push(bpy.types.Operator):
@@ -286,7 +229,44 @@ class BVCS_OT_Push(bpy.types.Operator):
         print("[BVCS] BVCS_OT_Push called — STUB (no functionality).")
         return {'FINISHED'}
 
-# ---------------- Pull ----------------
+
+# ---------------- Commit ----------------
+class BVCS_OT_Commit(bpy.types.Operator):
+    bl_idname = "bvcs.commit"
+    bl_label = "Commit Staged Objects (Stub)"
+
+    commit_message: bpy.props.StringProperty(name="Commit Message", default="Updated objects")
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        if not prefs.project_id:
+            self.report({'ERROR'}, "No project selected")
+            return {'CANCELLED'}
+
+        staged = BVCS_OT_StageObjects.staged_objects
+
+        if not staged:
+            self.report({'ERROR'}, "No staged objects to commit")
+            return {'CANCELLED'}
+
+        commit_data = {
+            "project_id": prefs.project_id,
+            "message": self.commit_message,
+            "objects": staged,
+        }
+
+        print("[BVCS] COMMIT DATA:", commit_data)
+        self.report({'INFO'}, "Commit created (stub).")
+
+        bpy.context.window_manager["bvcs_last_commit"] = commit_data
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+
+
+# ---------------- STUB: Pull ----------------
 class BVCS_OT_PullProject(bpy.types.Operator):
     bl_idname = "bvcs.pull_project"
     bl_label = "Pull Project (Stub)"
@@ -296,7 +276,8 @@ class BVCS_OT_PullProject(bpy.types.Operator):
         print("[BVCS] STUB: Pull triggered")
         return {'FINISHED'}
 
-# ---------------- Conflicts ----------------
+
+# ---------------- STUB: Conflicts ----------------
 class BVCS_OT_CheckConflicts(bpy.types.Operator):
     bl_idname = "bvcs.check_conflicts"
     bl_label = "Check Merge Conflicts (Stub)"
@@ -305,6 +286,7 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
         self.report({'INFO'}, "[STUB] Conflict detection not implemented yet.")
         print("[BVCS] STUB: Conflict check triggered")
         return {'FINISHED'}
+
 
 # ---------------- Panel ----------------
 class BVCS_PT_Panel(bpy.types.Panel):
@@ -339,6 +321,7 @@ class BVCS_PT_Panel(bpy.types.Panel):
             layout.operator("bvcs.pull_project")
             layout.operator("bvcs.check_conflicts")
 
+
 # ---------------- Registration ----------------
 classes = [
     BVCSAddonPreferences,
@@ -347,20 +330,23 @@ classes = [
     BVCS_OT_CreateProject,
     BVCS_OT_SelectProject,
     BVCS_OT_StageObjects,
-    BVCS_OT_Commit,
-    BVCS_OT_Push,
+    BVCS_OT_Commit,         # FIXED
+    BVCS_OT_Push,           # FIXED
     BVCS_OT_PullProject,
     BVCS_OT_CheckConflicts,
     BVCS_PT_Panel
 ]
 
+
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
 
+
 def unregister():
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
+
 
 if __name__ == "__main__":
     register()
