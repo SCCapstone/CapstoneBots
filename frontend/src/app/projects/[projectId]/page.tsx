@@ -29,11 +29,15 @@ export default function ProjectPage() {
     try {
       await deleteProject(token, projectId);
 
-      // Close overlay before navigating
+      // Close the overlay immediately
       setShowConfirm(false);
 
-      // Navigate back to project list
-      router.push("/projects");
+      // Prefer replace so the user can't go "Back" to a deleted project
+      router.replace("/projects");
+
+      // Hard fallback in case client-side routing glitches
+      // (Next dev/Turbopack can be finicky sometimes)
+      window.location.href = "/projects";
     } catch (err: any) {
       setError(err?.message || "Failed to delete project.");
       setDeleting(false);

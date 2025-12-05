@@ -44,15 +44,37 @@ export async function createProject(token: string, payload: ProjectCreatePayload
   return res.json();
 }
 
-export async function deleteProject(token: string, id: string): Promise<{ success: boolean }>{
+export async function deleteProject(token: string, id: string): Promise<void> {
   const res = await fetch(`${API_BASE}/api/projects/${id}`, {
     method: "DELETE",
     headers: {
-      "Authorization": `Bearer ${token}`,
+      Authorization: `Bearer ${token}`,
     },
   });
-  if (!res.ok) {
-    throw new Error(`Delete project failed: ${res.status}`);
+
+  // 204 No Content is success
+  if (res.status === 204) {
+    return;
   }
-  return res.json();
+
+  // Any other non-2xx status → try to pull an error message,
+  // but do NOT call res.json() first (it might be empty).
+  if (!res.ok) {
+    let message = `Delete project failed: ${res.status}`;
+
+    try {
+      const text = await res.text();
+      if (text) {
+        message = text;
+      }
+    } catch {
+      // ignore
+    }
+
+    throw new Error(message);
+  }
+
+  // For the rare case the backend returns 200 + JSON, we *could* parse it,
+  // but we don't actually need it anywhere, so just ignore.
+  return;
 }
