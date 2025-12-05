@@ -10,11 +10,44 @@ export type Project = {
   updated_at?: string;
 };
 
+export type Commit = {
+  commit_id: string;
+  project_id: string;
+  branch_id: string;
+  parent_commit_id: string | null;
+  author_id: string;
+  commit_hash: string;
+  commit_message: string;
+  committed_at: string;
+  merge_commit?: boolean;
+  merge_parent_id?: string | null;
+};
+
 export type ProjectCreatePayload = {
   name: string;
   description?: string;
   active?: boolean;
 };
+
+async function handleProjectError(res: Response, context: string) {
+  let message = `${context} failed: ${res.status}`;
+
+  try {
+    const data = await res.json();
+    if (data?.detail) {
+      message = Array.isArray(data.detail)
+        ? data.detail
+          .map((d: any) => d.msg || d.detail || JSON.stringify(d))
+          .join(", ")
+        : data.detail;
+    }
+  } catch {
+    const text = await res.text().catch(() => "");
+    if (text) message = text;
+  }
+
+  throw new Error(message);
+}
 
 export async function fetchProjects(token: string): Promise<Project[]> {
   const res = await fetch(`${API_BASE}/api/projects`, {
@@ -77,4 +110,28 @@ export async function deleteProject(token: string, id: string): Promise<void> {
   // For the rare case the backend returns 200 + JSON, we *could* parse it,
   // but we don't actually need it anywhere, so just ignore.
   return;
+}
+
+export async function fetchCommits(
+  token: string,
+  projectId: string,
+  branchName = "main"
+): Promise<Commit[]> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/commits?branch_name=${encodeURIComponent(
+      branchName
+    )}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+
+  if (!res.ok) {
+    await handleProjectError(res, "Fetch commits");
+  }
+
+  return res.json();
 }

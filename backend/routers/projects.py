@@ -337,54 +337,46 @@ async def create_branch(
 
 @router.get("/{project_id}/commits", response_model=List[CommitResponse])
 async def get_commit_history(
-    project_id: UUID,
-    branch_name: str = "main",
-    db: AsyncSession = Depends(get_db)
+        project_id: UUID,
+        branch_name: str = "main",
+        db: AsyncSession = Depends(get_db),
 ):
     """
     Get commit history for a branch (similar to 'git log').
-    
-    This endpoint retrieves all commits in a specific branch, showing the project's
-    version history. Each commit represents a snapshot of changes made to Blender
-    objects at a specific point in time. Commits are ordered newest first.
-    
-    Args:
-        project_id: UUID of the project
-        branch_name: Name of the branch (defaults to 'main')
-        db: Database session dependency
-        
-    Returns:
-        List[CommitResponse]: Commit history with author info, newest first
-        
-    Example:
-        GET /api/projects/123e4567-e89b-12d3-a456-426614174000/commits?branch_name=main
-        
-        Response:
-        [
-            {
-                "commit_id": "uuid",
-                "commit_hash": "a3f2e1...",
-                "commit_message": "Updated lighting setup",
-                "author_id": "user-id",
-                "committed_at": "2025-12-02T15:30:00",
-                "parent_commit_id": "parent-uuid"
-            }
-        ]
+
+    Returns an empty list if the branch has no commits or does not exist.
     """
-    # Query commits for the specified branch, join with Branch to filter by name
-    # Include author information via joinedload for efficient data fetching
-    query = (
+
+    # 1) Ensure the project exists (optional but nice for clarity)
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # 2) Find the branch for this project + name
+    branch_result = await db.execute(
+        select(Branch).where(
+            Branch.project_id == project_id,
+            Branch.branch_name == branch_name,
+            )
+    )
+    branch = branch_result.scalar_one_or_none()
+    if branch is None:
+        # No such branch -> no commits
+        return []
+
+    # 3) Get commits for that branch, newest first
+    commits_result = await db.execute(
         select(Commit)
-        .join(Branch)
         .where(
             Commit.project_id == project_id,
-            Branch.branch_name == branch_name
-        )
-        .options(joinedload(Commit.author))  # Eagerly load author data
-        .order_by(Commit.committed_at.desc())  # Most recent commits first
+            Commit.branch_id == branch.branch_id,
+            )
+        .options(joinedload(Commit.author))  # keep eager-loaded author
+        .order_by(Commit.committed_at.desc())
     )
-    result = await db.execute(query)
-    return result.scalars().unique().all()  # unique() prevents duplicate rows from join
+
+    commits = commits_result.scalars().unique().all()
+    return commits
 
 @router.post("/{project_id}/commits", response_model=CommitResponse, status_code=status.HTTP_201_CREATED)
 async def create_commit(
