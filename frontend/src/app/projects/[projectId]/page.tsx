@@ -1,15 +1,38 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter, useParams } from "next/navigation";
+import {useEffect, useState} from "react";
+import {useParams, useRouter} from "next/navigation";
 import Link from "next/link";
-import { useAuth } from "@/components/AuthProvider";
-import {
-  deleteProject,
-  fetchProjects,
-  fetchCommits,
-} from "@/lib/projectsApi";
-import type { Project, Commit } from "@/lib/projectsApi";
+import {useAuth} from "@/components/AuthProvider";
+import type {Commit, Project} from "@/lib/projectsApi";
+import {deleteProject, fetchCommits, fetchProjects} from "@/lib/projectsApi";
+import {fetchCurrentUser} from "@/lib/authApi";
+
+function formatCommitDate(dateString: string): string {
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) {
+    return dateString; // fallback if backend sends unexpected format
+  }
+  return date.toLocaleString();
+}
+
+async function loadCommitsWithUsers(
+  token: string,
+  projectId: string
+): Promise<Commit[]> {
+  // Get all commits for this project/branch
+  const rawCommits = await fetchCommits(token, projectId, "main");
+
+  // Get the currently logged-in user once
+  const me = await fetchCurrentUser(token);
+
+  // Attach username to any commit authored by this user
+  return rawCommits.map((c) => ({
+    ...c,
+    author_username:
+      c.author_id === me.user_id ? me.username : "Unknown User",
+  }));
+}
 
 type FileRow = {
   id: string;
@@ -113,7 +136,7 @@ export default function ProjectPage() {
       setCommitsError("");
 
       try {
-        const data = await fetchCommits(token, projectId, "main");
+        const data = await loadCommitsWithUsers(token, projectId);
         setCommits(data);
       } catch (err: any) {
         setCommitsError(err?.message || "Failed to load commits.");
@@ -150,11 +173,7 @@ export default function ProjectPage() {
 
   // 🔹 When clicking the "X Commits" button
   const handleOpenCommits = () => {
-    if (!token) {
-      setError("You must be logged in to view commits.");
-      return;
-    }
-
+    if (!token) return;
     setShowCommits(true);
   };
 
@@ -216,16 +235,21 @@ export default function ProjectPage() {
                 <span className="h-2 w-2 rounded-full bg-green-500" />
                 <span>main</span>
               </button>
-              <p className="text-slate-400">
-                <span className="font-medium text-slate-200">
-                  Alex Thompson
-                </span>{" "}
-                committed{" "}
-                <span className="text-sky-300">
-                  &quot;Finalize character model textures&quot;
-                </span>{" "}
-                · 2 hours ago
-              </p>
+
+              {commits.length > 0 ? (
+                <p className="text-slate-400">
+                  <span className="font-medium text-slate-200">
+                    {commits[0].author_username || "Unknown User"}
+                  </span>{" "}
+                  committed{" "}
+                  <span className="text-sky-300">
+                    &quot;{commits[0].commit_message}&quot;
+                  </span>{" "}
+                  · {formatCommitDate(commits[0].committed_at)}
+                </p>
+              ) : (
+                <p className="text-slate-500">No commits yet</p>
+              )}
             </div>
           </div>
         </div>

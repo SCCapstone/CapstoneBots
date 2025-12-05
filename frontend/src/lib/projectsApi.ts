@@ -21,6 +21,7 @@ export type Commit = {
   committed_at: string;
   merge_commit?: boolean;
   merge_parent_id?: string | null;
+  author_username?: string;
 };
 
 export type ProjectCreatePayload = {
@@ -134,4 +135,18 @@ export async function fetchCommits(
   }
 
   return res.json();
+}
+
+export async function fetchUserById(token: string, userId: string) {
+  const res = await fetch(`${API_BASE}/api/auth/me/${userId}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch user: ${res.status}`);
+  }
+
+  return res.json(); // { username, email, ... }
 }

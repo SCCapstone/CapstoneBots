@@ -6,6 +6,26 @@ export type SignupPayload = {
   password: string;
 };
 
+export type MeResponse = {
+  user_id: string;
+  username: string;
+  email: string;
+  created_at: string;
+};
+
+export async function fetchCurrentUser(token: string): Promise<MeResponse> {
+  const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/auth/me`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) {
+    throw new Error("Failed to fetch current user");
+  }
+
+  return res.json();
+}
+
 export async function loginApi(email: string, password: string) {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
