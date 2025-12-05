@@ -10,11 +10,53 @@ export type Project = {
   updated_at?: string;
 };
 
+export type Commit = {
+  commit_id: string;
+  project_id: string;
+  branch_id: string;
+  parent_commit_id: string | null;
+  author_id: string;
+  commit_hash: string;
+  commit_message: string;
+  committed_at: string;
+  merge_commit?: boolean;
+  merge_parent_id?: string | null;
+  author_username?: string;
+};
+
 export type ProjectCreatePayload = {
   name: string;
   description?: string;
   active?: boolean;
 };
+
+export interface BlenderObject {
+  object_id: string;
+  object_name: string;
+  object_type: string;
+  file_path: string;
+  commit_id: string;
+};
+
+async function handleProjectError(res: Response, context: string) {
+  let message = `${context} failed: ${res.status}`;
+
+  try {
+    const data = await res.json();
+    if (data?.detail) {
+      message = Array.isArray(data.detail)
+        ? data.detail
+          .map((d: any) => d.msg || d.detail || JSON.stringify(d))
+          .join(", ")
+        : data.detail;
+    }
+  } catch {
+    const text = await res.text().catch(() => "");
+    if (text) message = text;
+  }
+
+  throw new Error(message);
+}
 
 export async function fetchProjects(token: string): Promise<Project[]> {
   const res = await fetch(`${API_BASE}/api/projects`, {
@@ -44,15 +86,83 @@ export async function createProject(token: string, payload: ProjectCreatePayload
   return res.json();
 }
 
-export async function deleteProject(token: string, id: string): Promise<{ success: boolean }>{
+export async function deleteProject(token: string, id: string): Promise<void> {
   const res = await fetch(`${API_BASE}/api/projects/${id}`, {
     method: "DELETE",
     headers: {
-      "Authorization": `Bearer ${token}`,
+      Authorization: `Bearer ${token}`,
     },
   });
-  if (!res.ok) {
-    throw new Error(`Delete project failed: ${res.status}`);
+
+  // 204 No Content is success
+  if (res.status === 204) {
+    return;
   }
+
+  // Any other non-2xx status → try to pull an error message,
+  // but do NOT call res.json() first (it might be empty).
+  if (!res.ok) {
+    let message = `Delete project failed: ${res.status}`;
+
+    try {
+      const text = await res.text();
+      if (text) {
+        message = text;
+      }
+    } catch {
+      // ignore
+    }
+
+    throw new Error(message);
+  }
+
+  // For the rare case the backend returns 200 + JSON, we *could* parse it,
+  // but we don't actually need it anywhere, so just ignore.
+  return;
+}
+
+export async function fetchCommits(
+  token: string,
+  projectId: string,
+  branchName = "main"
+): Promise<Commit[]> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/commits?branch_name=${encodeURIComponent(
+      branchName
+    )}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+
+  if (!res.ok) {
+    await handleProjectError(res, "Fetch commits");
+  }
+
+  return res.json();
+}
+
+export async function fetchCommitObjects(
+  token: string,
+  projectId: string,
+  commitId: string
+): Promise<BlenderObject[]> {
+  const res = await fetch(
+    `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/projects/${projectId}/commits/${commitId}/objects`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error("Failed to fetch commit objects");
+  }
+
   return res.json();
 }
