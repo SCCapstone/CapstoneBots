@@ -11,9 +11,9 @@ Also includes utilities:
 - VersioningHelper: Version tag creation and parsing
 """
 
-from storage_service import StorageService, get_storage_service
-from minio_client import upload_file, download_file, upload_version, upload_bytes, download_bytes
-from storage_utils import StorageUtils, DeduplicationManager, VersioningHelper, StorageCompression
+from .storage_service import StorageService, get_storage_service
+from .minio_client import upload_file, download_file, upload_version, upload_bytes, download_bytes
+from .storage_utils import StorageUtils, DeduplicationManager, VersioningHelper, StorageCompression
 
 __all__ = [
     # Service and dependency injection
