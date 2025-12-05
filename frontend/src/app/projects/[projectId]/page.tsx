@@ -40,6 +40,7 @@ type FileRow = {
   type: "folder" | "file";
   lastCommit: string;
   updatedAt: string;
+  s3Path?: string;
 };
 
 export default function ProjectPage() {
@@ -136,14 +137,35 @@ export default function ProjectPage() {
             latest.commit_id
           );
 
-          const rows: FileRow[] = objects.map((obj) => ({
-            id: obj.object_id,
-            name: obj.object_name,
-            // treat COLLECTION as "folder", everything else as "file" for now
-            type: obj.object_type === "COLLECTION" ? "folder" : "file",
-            lastCommit: `"${latest.commit_message}"`,
-            updatedAt: formatCommitDate(latest.committed_at),
-          }));
+          const rows: FileRow[] = objects.map((obj) => {
+            let s3Path: string | undefined;
+
+            // Only the BLEND_FILE represents the full .blend in S3
+            // @ts-ignore
+            if (obj.object_type === "BLEND_FILE" && obj.json_data_path) {
+              // @ts-ignore
+              const raw = obj.json_data_path as string;
+
+              // Example raw:
+              // "s3://blender-vcs-prod/a5deedcc-.../Untitled.blend"
+              const prefix = "s3://blender-vcs-prod/";
+              if (raw.startsWith(prefix)) {
+                s3Path = raw.slice(prefix.length); // -> "a5deedcc-.../Untitled.blend"
+              } else {
+                // fallback if backend ever changes format
+                s3Path = raw;
+              }
+            }
+
+            return {
+              id: obj.object_id,
+              name: obj.object_name,
+              type: obj.object_type === "COLLECTION" ? "folder" : "file",
+              lastCommit: `"${latest.commit_message}"`,
+              updatedAt: formatCommitDate(latest.committed_at),
+              s3Path, // 👈 store it
+            };
+          });
 
           setFiles(rows);
         } else {
@@ -182,6 +204,36 @@ export default function ProjectPage() {
     } catch (err: any) {
       setError(err?.message || "Failed to delete project.");
       setDeleting(false);
+    }
+  };
+  
+  const API_BASE =
+    process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+  const handleDownloadFile = async (file: FileRow) => {
+    if (!file.s3Path) {
+      console.warn("No S3 path for this file; nothing to download.");
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/download/download/signed-url/${encodeURIComponent(
+          file.s3Path
+        )}`
+      );
+
+      if (!res.ok) {
+        console.error("Failed to get signed URL", await res.text());
+        return;
+      }
+
+      const data = (await res.json()) as { url: string };
+      if (data.url) {
+        window.open(data.url, "_blank");
+      }
+    } catch (e) {
+      console.error("Error downloading file", e);
     }
   };
 
@@ -233,7 +285,7 @@ export default function ProjectPage() {
             </button>
             <button
               type="button"
-              onClick={() => setShowConfirm(true)}
+              // onClick={() => setShowConfirm(true)}
               className="rounded-lg border border-red-500/70 px-3 py-1 text-[11px] text-red-300 transition hover:bg-red-500/10"
             >
               Delete
@@ -271,13 +323,13 @@ export default function ProjectPage() {
         {/* Files table only – no README, no New File */}
         <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60 text-xs">
           {/* Table header */}
-          <div className="grid grid-cols-3 border-b border-slate-800 bg-slate-950 px-4 py-2 text-[11px] font-medium text-slate-400">
+          <div className="grid grid-cols-4 border-b border-slate-800 bg-slate-950 px-4 py-2 text-[11px] font-medium text-slate-400">
             <div className="text-left">NAME</div>
             <div className="text-left">LAST COMMIT</div>
             <div className="text-right">LAST UPDATED</div>
+            <div className="text-right">ACTIONS</div>
           </div>
 
-          {/* Rows */}
           {/* Rows */}
           <div className="divide-y divide-slate-800">
             {filesLoading ? (
@@ -292,30 +344,41 @@ export default function ProjectPage() {
               files.map((file) => (
                 <div
                   key={file.id}
-                  className="grid grid-cols-3 items-center px-4 py-2 hover:bg-slate-900"
+                  className="grid grid-cols-4 items-center px-4 py-2 hover:bg-slate-900"
                 >
                   {/* Name + icon */}
                   <div className="flex items-center gap-2 text-slate-100">
-          <span
-            className={`flex h-4 w-4 items-center justify-center rounded-sm ${
-              file.type === "folder"
-                ? "bg-yellow-500/20 text-yellow-300"
-                : "bg-slate-700/60 text-slate-300"
-            }`}
-          >
-            {file.type === "folder" ? "▣" : "▤"}
-          </span>
+                    <span
+                      className={`flex h-4 w-4 items-center justify-center rounded-sm ${
+                        file.type === "folder"
+                          ? "bg-yellow-500/20 text-yellow-300"
+                          : "bg-slate-700/60 text-slate-300"
+                      }`}
+                    >
+                      {file.type === "folder" ? "▣" : "▤"}
+                    </span>
                     <span className="truncate">{file.name}</span>
                   </div>
 
                   {/* Last commit message */}
-                  <div className="truncate text-slate-400">
-                    {file.lastCommit}
-                  </div>
+                  <div className="truncate text-slate-400">{file.lastCommit}</div>
 
                   {/* Updated at */}
-                  <div className="text-right text-slate-500">
-                    {file.updatedAt}
+                  <div className="text-right text-slate-500">{file.updatedAt}</div>
+
+                  {/* Actions */}
+                  <div className="text-right">
+                    {file.s3Path ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadFile(file)}
+                        className="rounded border border-sky-500 px-2 py-0.5 text-[11px] text-sky-300 hover:bg-sky-500/10"
+                      >
+                        Download
+                      </button>
+                    ) : (
+                      <span className="text-[11px] text-slate-600">—</span>
+                    )}
                   </div>
                 </div>
               ))
