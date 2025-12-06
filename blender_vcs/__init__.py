@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 bl_info = {
     "name": "BVCS",
     "author": "Capstone Bots",
@@ -46,7 +48,8 @@ class BVCSAddonPreferences(bpy.types.AddonPreferences):
 
     api_url: bpy.props.StringProperty(
         name="API URL",
-        default="https://capstonebots-production.up.railway.app",
+        default="http://localhost:8000/"
+        # default="https://capstonebots-production.up.railway.app",
     )
     auth_token: bpy.props.StringProperty(
         name="JWT Token",
