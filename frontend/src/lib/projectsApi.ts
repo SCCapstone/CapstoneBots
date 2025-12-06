@@ -158,7 +158,7 @@ export async function fetchCommitObjects(
         Accept: "application/json",
       },
     }
-  );
+  ); 
 
   if (!res.ok) {
     throw new Error("Failed to fetch commit objects");
