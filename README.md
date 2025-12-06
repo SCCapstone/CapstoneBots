@@ -115,7 +115,7 @@ The frontend dev server will be available at: http://localhost:3000
 
 Running with Docker (single service)
 
-Build and run the frontend image (uses `frontend/Dockerfile`):
+Build and run the frontend image (uses `frontend/Dockerfile`): 
 
 ```bash
 section that explains how to run them.
