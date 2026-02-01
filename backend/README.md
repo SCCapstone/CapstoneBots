@@ -54,4 +54,6 @@ From the `backend/` directory:
 ```bash
 source .venv/bin/activate
 pytest -q
+pytest -v
 ```
+Note: Some integration tests are skipped unless MinIO is running.
