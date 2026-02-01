@@ -50,6 +50,7 @@ We use **pytest** for unit testing and **FastAPI’s TestClient (httpx)** for be
 ### Running Tests
 
 From the `backend/` directory:
+Tests live in: backend/tests/
 
 ```bash
 source .venv/bin/activate
