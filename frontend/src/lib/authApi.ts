@@ -6,6 +6,28 @@ export type SignupPayload = {
   password: string;
 };
 
+export type MeResponse = {
+  user_id: string;
+  username: string;
+  email: string;
+  created_at: string;
+};
+
+export async function fetchCurrentUser(token: string): Promise<MeResponse> {
+  const res = await fetch(`${API_BASE}/api/auth/me`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) {
+    console.log(res.json());
+    throw new Error("Failed to fetch current user");
+  }
+
+  return res.json();
+}
+
+
 export async function loginApi(email: string, password: string) {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
@@ -17,15 +39,36 @@ export async function loginApi(email: string, password: string) {
   }
   return res.json();
 }
- 
+
 export async function signupApi(payload: SignupPayload) {
   const res = await fetch(`${API_BASE}/api/auth/register`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify(payload),
   });
+
   if (!res.ok) {
-    throw new Error(`Signup failed: ${res.status}`);
+    let message = "Signup failed";
+
+    try {
+      const data = await res.json();
+
+      if (data?.detail) {
+        // Backend may return a string or a list
+        if (typeof data.detail === "string") {
+          message = data.detail;
+        } else if (Array.isArray(data.detail)) {
+          message = data.detail.map((d: any) => d.msg || d.detail).join(", ");
+        }
+      }
+    } catch {
+      /* backend returned no JSON */
+    }
+
+    throw new Error(message);
   }
+
   return res.json();
 }

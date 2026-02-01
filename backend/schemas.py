@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, EmailStr
 from datetime import datetime
 from uuid import UUID
@@ -172,3 +172,62 @@ class ProjectMetadataResponse(ProjectMetadataBase):
 
     class Config:
         from_attributes = True
+
+
+# ============== Storage & Versioning Schemas ==============
+class StorageObjectInfo(BaseModel):
+    """Information about a stored object in MinIO"""
+    name: str
+    size: int
+    etag: str
+    last_modified: datetime
+    version_id: Optional[str] = None
+
+
+class ProjectStorageStats(BaseModel):
+    """Storage statistics for a project"""
+    project_id: UUID
+    total_bytes: int
+    objects_bytes: int
+    versions_bytes: int
+    total_mb: float
+
+
+class CommitSnapshotResponse(BaseModel):
+    """Response for commit snapshot operations"""
+    commit_id: UUID
+    snapshot_path: str
+    snapshot_size: int
+    created_at: datetime
+
+
+class ObjectDownloadResponse(BaseModel):
+    """Response containing object data for download"""
+    object_id: UUID
+    object_name: str
+    object_type: str
+    json_data: Dict[str, Any]
+    mesh_data: Optional[bytes] = None
+    storage_info: Optional[StorageObjectInfo] = None
+
+
+class CommitDataRequest(BaseModel):
+    """Enhanced commit request with optional mesh data"""
+    branch_id: UUID
+    author_id: UUID
+    commit_message: str
+    objects: List[BlenderObjectCreate]
+    include_snapshot: bool = False  # Whether to save full .blend snapshot
+
+
+class VersionHistoryResponse(BaseModel):
+    """Response for version history listing"""
+    commit_id: UUID
+    commit_hash: str
+    commit_message: str
+    author_id: UUID
+    committed_at: datetime
+    snapshot_path: Optional[str]
+    snapshot_size: Optional[int]
+
+

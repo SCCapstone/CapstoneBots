@@ -6,6 +6,12 @@ This project is a Version Control System (VCS) for Blender, enabling teams to co
 
 For in-depth information, see the Project Description Wiki.
 
+## Documentation
+
+- **[Storage & Versioning System](./STORAGE.md)** - Comprehensive guide to file routing, object storage, deduplication, and version management
+- **[Deployment Guide](./DEPLOYMENT.md)** - Production deployment instructions
+- **[API Documentation](http://localhost:8000/docs)** - Interactive Swagger docs (when running locally)
+
 ## Quick Start (Docker)
 
 The easiest way to run the entire application (Database, Backend, and Frontend) is using Docker Compose.
@@ -109,7 +115,7 @@ The frontend dev server will be available at: http://localhost:3000
 
 Running with Docker (single service)
 
-Build and run the frontend image (uses `frontend/Dockerfile`):
+Build and run the frontend image (uses `frontend/Dockerfile`): 
 
 ```bash
 section that explains how to run them.
