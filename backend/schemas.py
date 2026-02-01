@@ -59,8 +59,11 @@ class BranchBase(BaseModel):
     branch_name: str
     parent_branch_id: Optional[UUID] = None
 
-class BranchCreate(BranchBase):
-    created_by: UUID
+
+class BranchCreate(BaseModel):
+    # What the client provides
+    name: str
+    parent_branch_id: Optional[UUID] = None
 
 class BranchResponse(BranchBase):
     branch_id: UUID
@@ -76,6 +79,7 @@ class BranchResponse(BranchBase):
 class CommitBase(BaseModel):
     commit_message: str
 
+# Create schema for commits not requiring all fields
 class CommitCreate(CommitBase):
     pass
 
@@ -116,7 +120,7 @@ class BlenderObjectResponse(BlenderObjectBase):
 # Request model for creating a commit (includes objects)
 class CommitCreateRequest(BaseModel):
     branch_id: UUID
-    author_id: UUID
+    # author_id: UUID | Removed to be inferred from auth token
     commit_message: str
     objects: List[BlenderObjectCreate]
 
@@ -127,7 +131,7 @@ class ObjectLockBase(BaseModel):
 class ObjectLockCreate(ObjectLockBase):
     expires_at: datetime
     branch_id: UUID
-    locked_by: UUID
+    # locked_by: UUID | Removed to be inferred from auth token
 
 class ObjectLockResponse(ObjectLockBase):
     lock_id: UUID

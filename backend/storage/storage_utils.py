@@ -79,37 +79,51 @@ class StorageUtils:
     def parse_storage_path(path: str) -> Dict[str, str]:
         """
         Parse a storage path into components.
-        
-        Example: projects/{project_id}/objects/{object_id}/{commit_hash}.json
-        
-        Args:
-            path: Storage path
-            
-        Returns:
-            dict: Parsed components
+
+        Supported:
+        - projects/dedup/{blob_hash}.json
+        - projects/{project_id}/dedup/{blob_hash}.json
+        - projects/{project_id}/objects/{object_id}/{commit_hash}.json
+        - projects/{project_id}/versions/{filename}
         """
-        parts = path.split('/')
-        
+        parts = path.split("/")
+
         if len(parts) < 2:
             raise ValueError(f"Invalid storage path: {path}")
-        
-        result = {}
-        
-        if parts[0] == "projects":
-            result["project_id"] = parts[1] if len(parts) > 1 else None
-            
-            if len(parts) > 2:
-                if parts[2] == "objects":
-                    result["type"] = "object"
-                    result["object_id"] = parts[3] if len(parts) > 3 else None
-                    result["commit_hash"] = parts[4].replace(".json", "") if len(parts) > 4 else None
-                elif parts[2] == "versions":
-                    result["type"] = "snapshot"
-                    result["filename"] = parts[3] if len(parts) > 3 else None
-                elif parts[2] == "dedup":
-                    result["type"] = "dedup"
-                    result["blob_hash"] = parts[3].replace(".json", "") if len(parts) > 3 else None
-        
+
+        result: Dict[str, str] = {}
+
+        if parts[0] != "projects":
+            return result
+
+        # ----------------------------
+        # Format A: projects/dedup/{hash}.json
+        # ----------------------------
+        if parts[1] == "dedup":
+            result["type"] = "dedup"
+            result["project_id"] = None
+            result["blob_hash"] = parts[2].replace(".json", "") if len(parts) > 2 else None
+            return result
+
+        # ----------------------------
+        # Format B: projects/{project_id}/...
+        # ----------------------------
+        result["project_id"] = parts[1] if len(parts) > 1 else None
+
+        if len(parts) > 2:
+            if parts[2] == "objects":
+                result["type"] = "object"
+                result["object_id"] = parts[3] if len(parts) > 3 else None
+                result["commit_hash"] = parts[4].replace(".json", "") if len(parts) > 4 else None
+
+            elif parts[2] == "versions":
+                result["type"] = "snapshot"
+                result["filename"] = parts[3] if len(parts) > 3 else None
+
+            elif parts[2] == "dedup":
+                result["type"] = "dedup"
+                result["blob_hash"] = parts[3].replace(".json", "") if len(parts) > 3 else None
+
         return result
 
     @staticmethod
