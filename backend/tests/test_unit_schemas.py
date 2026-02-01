@@ -14,9 +14,8 @@ def test_project_create_defaults():
 
 
 def test_branch_create_requires_name_or_branch_name():
-    # If your BranchCreate uses `name`, test that. If it uses `branch_name`, change accordingly.
     with pytest.raises(Exception):
-        BranchCreate()  # missing required fields
+        BranchCreate()
 
 
 def test_commit_create_request_requires_objects():
@@ -24,8 +23,6 @@ def test_commit_create_request_requires_objects():
         "branch_id": str(uuid4()),
         "commit_message": "test commit",
         "objects": [],
-        # If your schema still requires author_id, add it:
-        # "author_id": str(uuid4()),
     }
     c = CommitCreateRequest(**payload)
     assert c.commit_message == "test commit"
