@@ -1,11 +1,17 @@
 "use client";
 
-import {useEffect, useState} from "react";
+import {useEffect, useState, type FormEvent} from "react";
 import {useParams, useRouter} from "next/navigation";
 import Link from "next/link";
 import {useAuth} from "@/components/AuthProvider";
 import type {Commit, Project} from "@/lib/projectsApi";
-import {deleteProject, fetchCommits, fetchProjects, fetchCommitObjects} from "@/lib/projectsApi";
+import {
+  // addProjectMember,
+  deleteProject,
+  fetchCommits,
+  fetchProjects,
+  fetchCommitObjects,
+} from "@/lib/projectsApi";
 import {fetchCurrentUser} from "@/lib/authApi";
 
 function formatCommitDate(dateString: string): string {
@@ -66,6 +72,10 @@ export default function ProjectPage() {
   // 🔹 Files state (real data)
   const [files, setFiles] = useState<FileRow[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
+
+  // const [memberEmail, setMemberEmail] = useState("");
+  // const [addingMember, setAddingMember] = useState(false);
+  // const [memberMessage, setMemberMessage] = useState("");
 
 
   // Load project name so we can show "Project Alpha" style headings
@@ -191,6 +201,36 @@ export default function ProjectPage() {
     setShowCommits(true);
   };
 
+  // const handleAddMember = async (event: FormEvent<HTMLFormElement>) => {
+  //   event.preventDefault();
+  //
+  //   if (!token) {
+  //     setMemberMessage("You must be logged in to add a member.");
+  //     return;
+  //   }
+  //
+  //   if (!memberEmail.trim()) {
+  //     setMemberMessage("Please enter an email address.");
+  //     return;
+  //   }
+  //
+  //   setAddingMember(true);
+  //   setMemberMessage("");
+  //
+  //   try {
+  //     const result = await addProjectMember(token, projectId, {
+  //       email: memberEmail.trim(),
+  //     });
+  //
+  //     setMemberEmail("");
+  //     setMemberMessage(`Added ${result.email} to this project.`);
+  //   } catch (err: any) {
+  //     setMemberMessage(err?.message || "Failed to add member.");
+  //   } finally {
+  //     setAddingMember(false);
+  //   }
+  // };
+
   return (
     <div className="relative min-h-screen bg-[#0f172a] flex items-center justify-center px-4">
       {/* Back Button */}
@@ -267,6 +307,43 @@ export default function ProjectPage() {
             </div>
           </div>
         </div>
+
+        {/* Add member section (commented out for frontend reference) */}
+        {/*
+        <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-xs">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-[11px] text-slate-400">Add member by email</p>
+              <p className="text-[11px] text-slate-500">
+                Enter an email address to grant immediate access to this project.
+              </p>
+            </div>
+            <form
+              onSubmit={handleAddMember}
+              className="flex w-full max-w-md items-center gap-2"
+            >
+              <input
+                type="email"
+                value={memberEmail}
+                onChange={(event) => setMemberEmail(event.target.value)}
+                placeholder="teammate@example.com"
+                className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-[11px] text-slate-200 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+                required
+              />
+              <button
+                type="submit"
+                disabled={addingMember}
+                className="rounded-lg border border-slate-700 px-3 py-2 text-[11px] text-slate-200 transition hover:border-sky-500 hover:text-sky-200 disabled:opacity-60"
+              >
+                {addingMember ? "Adding..." : "Add Member"}
+              </button>
+            </form>
+          </div>
+          {memberMessage && (
+            <p className="mt-2 text-[11px] text-slate-300">{memberMessage}</p>
+          )}
+        </div>
+        */}
 
         {/* Files table only – no README, no New File */}
         <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60 text-xs">

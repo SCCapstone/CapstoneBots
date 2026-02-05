@@ -19,6 +19,7 @@ class User(Base):
     projects = relationship("Project", back_populates="owner")
     commits = relationship("Commit", back_populates="author")
     locks = relationship("ObjectLock", back_populates="locked_by_user")
+    project_memberships = relationship("ProjectMember", foreign_keys="ProjectMember.user_id", back_populates="user")
 
 
 class Project(Base):
@@ -39,6 +40,7 @@ class Project(Base):
     locks = relationship("ObjectLock", back_populates="project", cascade="all, delete-orphan")
     conflicts = relationship("MergeConflict", back_populates="project", cascade="all, delete-orphan")
     project_metadata = relationship("ProjectMetadata", back_populates="project", cascade="all, delete-orphan")
+    members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
 
 
 class Branch(Base):
@@ -128,7 +130,6 @@ class MergeConflict(Base):
 
     project = relationship("Project", back_populates="conflicts")
 
-
 class ProjectMetadata(Base):
     __tablename__ = "project_metadata"
 
@@ -141,3 +142,31 @@ class ProjectMetadata(Base):
     __table_args__ = (UniqueConstraint("project_id", "key", name="unique_project_metadata"),)
 
     project = relationship("Project", back_populates="project_metadata")
+
+
+class ProjectMember(Base):
+    """
+    Junction table for project collaboration.
+    
+    Enables many-to-many relationship between users and projects.
+    When a user is added to a project, they get immediate access without requiring acceptance.
+    The Blender add-on will automatically show all projects where user is owner or member.
+    """
+    __tablename__ = "project_members"
+
+    member_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    role = Column(String, default="member", nullable=False)  # "owner" or "member"
+    added_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    added_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+
+    # Unique constraint to prevent duplicate memberships
+    __table_args__ = (
+        UniqueConstraint("project_id", "user_id", name="unique_project_member"),
+    )
+
+    # Relationships
+    project = relationship("Project", back_populates="members")
+    user = relationship("User", foreign_keys=[user_id], back_populates="project_memberships")
+    added_by_user = relationship("User", foreign_keys=[added_by])

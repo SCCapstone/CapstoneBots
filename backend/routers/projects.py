@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from database import get_db
-from models import Project, Branch, Commit, BlenderObject, ObjectLock, MergeConflict, User
+from models import Project, Branch, Commit, BlenderObject, ObjectLock, MergeConflict, User, ProjectMember
 from schemas import (
     ProjectCreate, ProjectResponse, ProjectUpdate, ProjectBase,
     BranchCreate, BranchResponse,
@@ -31,8 +31,10 @@ from schemas import (
     BlenderObjectCreate, BlenderObjectResponse,
     ObjectLockCreate, ObjectLockResponse,
     MergeConflictResponse,
+    ProjectMemberAdd, ProjectMemberResponse, ProjectMemberRemove, ProjectWithMembersResponse,
 )
 from utils.auth import get_current_user
+from utils.permissions import check_project_access, is_project_member, get_user_projects
 
 # Initialize the router for project-related endpoints
 router = APIRouter()
@@ -45,17 +47,21 @@ async def get_projects(
         current_user: User = Depends(get_current_user),
 ):
     """
-    Get all projects owned by the authenticated user.
+    Get all projects accessible by the authenticated user.
     
-    This endpoint retrieves a list of all Blender projects that belong to the
-    currently logged-in user, sorted by creation date (newest first).
+    This endpoint retrieves all Blender projects that the user can access:
+    - Projects owned by the user
+    - Projects where the user is a member (added by another user)
+    
+    This is the primary endpoint used by the Blender add-on to show available projects.
+    When users log into the add-on, this endpoint returns all their accessible projects.
     
     Args:
         db: Database session dependency
         current_user: Authenticated user from JWT token
         
     Returns:
-        List[ProjectResponse]: List of user's projects with metadata
+        List[ProjectResponse]: List of accessible projects with metadata
         
     Example:
         GET /api/projects
@@ -69,17 +75,23 @@ async def get_projects(
                 "description": "A collaborative 3D scene",
                 "owner_id": "user-id",
                 "created_at": "2025-12-01T10:00:00"
+            },
+            {
+                "project_id": "987e6543-e21b-12d3-a456-426614174999",
+                "name": "Team Project",
+                "description": "Shared project I was added to",
+                "owner_id": "other-user-id",
+                "created_at": "2025-11-15T14:30:00"
             }
         ]
     """
-    # Query database for all projects owned by the current user
-    query = (
-        select(Project)
-        .where(Project.owner_id == current_user.user_id)
-        .order_by(Project.created_at.desc())  # Most recent projects first
-    )
-    result = await db.execute(query)
-    return result.scalars().all()
+    # Use the helper function to get all projects user has access to
+    projects = await get_user_projects(current_user.user_id, db)
+    
+    # Sort by most recently updated
+    projects.sort(key=lambda p: p.updated_at, reverse=True)
+    
+    return projects
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_project(
@@ -129,7 +141,18 @@ async def create_project(
         created_by=new_project.owner_id,
     )
     db.add(main_branch)
-    await db.commit()  # Commit both project and branch together
+    
+    # Add the owner as a project member with "owner" role
+    # This ensures the owner appears in the members list and collaboration system works consistently
+    owner_member = ProjectMember(
+        project_id=new_project.project_id,
+        user_id=current_user.user_id,
+        role="owner",
+        added_by=current_user.user_id
+    )
+    db.add(owner_member)
+    
+    await db.commit()  # Commit project, branch, and membership together
     await db.refresh(new_project)  # Refresh to get all generated fields
     return new_project
 
@@ -760,3 +783,288 @@ async def resolve_conflict(
     await db.commit()
     await db.refresh(conflict)  # Get updated timestamp if any
     return conflict
+
+
+# ============== Project Collaboration Routes ==============
+
+@router.post("/{project_id}/members", response_model=ProjectMemberResponse, status_code=status.HTTP_201_CREATED)
+async def add_project_member(
+    project_id: UUID,
+    member_data: ProjectMemberAdd,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Add a user to a project by email address (immediate access, no invitation).
+    
+    This endpoint allows project owners and existing members to add other users
+    to collaborate on a project. The user is granted immediate access without
+    requiring invitation acceptance.
+    
+    **FRONTEND INTEGRATION POINT:**
+    When user clicks "Add Member" or "Invite Collaborator" button:
+    
+    ```javascript
+    // Example frontend code
+    const response = await fetch(`/api/projects/${projectId}/members`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            email: 'teammate@example.com'
+        })
+    });
+    ```
+    
+    **Blender Add-on Integration:**
+    When users log into the Blender add-on, the GET /api/projects endpoint
+    will automatically return all projects they've been added to.
+    
+    Args:
+        project_id: UUID of the project to add member to
+        member_data: Contains the email address of user to add
+        db: Database session dependency
+        current_user: Authenticated user (must be owner or existing member)
+        
+    Returns:
+        ProjectMemberResponse: Details of the newly added member
+        
+    Raises:
+        HTTPException 403: If current user doesn't have permission to add members
+        HTTPException 404: If project or user (by email) doesn't exist
+        HTTPException 409: If user is already a member of the project
+        
+    Example Request:
+        POST /api/projects/123e4567-e89b-12d3-a456-426614174000/members
+        Headers: Authorization: Bearer <token>
+        {
+            "email": "colleague@example.com"
+        }
+        
+    Example Response:
+        {
+            "member_id": "uuid",
+            "project_id": "123e4567-e89b-12d3-a456-426614174000",
+            "user_id": "user-uuid",
+            "username": "colleague_username",
+            "email": "colleague@example.com",
+            "role": "member",
+            "added_at": "2025-12-05T10:30:00",
+            "added_by": "current-user-uuid"
+        }
+    """
+    # Step 1: Check if current user has access to this project
+    # Only owners and existing members can add new members
+    project, user_role = await check_project_access(
+        project_id, 
+        current_user.user_id, 
+        db, 
+        require_owner=False  # Members can also add other members
+    )
+    
+    # Step 2: Find the user to add by email
+    query = select(User).where(User.email == member_data.email)
+    result = await db.execute(query)
+    user_to_add = result.scalars().first()
+    
+    if not user_to_add:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No user found with email: {member_data.email}"
+        )
+    
+    # Step 3: Check if user is already a member
+    if user_to_add.user_id == project.owner_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="User is already the project owner"
+        )
+    
+    existing_member_query = select(ProjectMember).where(
+        ProjectMember.project_id == project_id,
+        ProjectMember.user_id == user_to_add.user_id
+    )
+    existing_result = await db.execute(existing_member_query)
+    existing_member = existing_result.scalars().first()
+    
+    if existing_member:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="User is already a member of this project"
+        )
+    
+    # Step 4: Add the user as a member
+    new_member = ProjectMember(
+        project_id=project_id,
+        user_id=user_to_add.user_id,
+        role="member",
+        added_by=current_user.user_id
+    )
+    db.add(new_member)
+    await db.commit()
+    await db.refresh(new_member)
+    
+    # Step 5: Build response with user information
+    response = ProjectMemberResponse(
+        member_id=new_member.member_id,
+        project_id=new_member.project_id,
+        user_id=new_member.user_id,
+        username=user_to_add.username,
+        email=user_to_add.email,
+        role=new_member.role,
+        added_at=new_member.added_at,
+        added_by=new_member.added_by
+    )
+    
+    return response
+
+
+@router.get("/{project_id}/members", response_model=List[ProjectMemberResponse])
+async def get_project_members(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get all members of a project.
+    
+    Returns a list of all users who have access to the project, including
+    the owner and all added members.
+    
+    **FRONTEND INTEGRATION POINT:**
+    Use this to display the "Members" or "Collaborators" list in your project settings.
+    
+    Args:
+        project_id: UUID of the project
+        db: Database session dependency
+        current_user: Authenticated user (must have access to project)
+        
+    Returns:
+        List[ProjectMemberResponse]: List of all project members with details
+        
+    Raises:
+        HTTPException 403: If current user doesn't have access to project
+        HTTPException 404: If project doesn't exist
+        
+    Example Response:
+        [
+            {
+                "member_id": "uuid1",
+                "user_id": "owner-uuid",
+                "username": "project_owner",
+                "email": "owner@example.com",
+                "role": "owner",
+                "added_at": "2025-12-01T10:00:00"
+            },
+            {
+                "member_id": "uuid2",
+                "user_id": "member-uuid",
+                "username": "team_member",
+                "email": "member@example.com",
+                "role": "member",
+                "added_at": "2025-12-05T14:30:00",
+                "added_by": "owner-uuid"
+            }
+        ]
+    """
+    # Check if user has access to this project
+    project, _ = await check_project_access(project_id, current_user.user_id, db)
+    
+    # Get all members including owner
+    query = (
+        select(ProjectMember, User)
+        .join(User, ProjectMember.user_id == User.user_id)
+        .where(ProjectMember.project_id == project_id)
+        .order_by(ProjectMember.added_at.asc())  # Owner first (added earliest)
+    )
+    result = await db.execute(query)
+    members_with_users = result.all()
+    
+    # Build response list
+    response = []
+    for member, user in members_with_users:
+        response.append(ProjectMemberResponse(
+            member_id=member.member_id,
+            project_id=member.project_id,
+            user_id=member.user_id,
+            username=user.username,
+            email=user.email,
+            role=member.role,
+            added_at=member.added_at,
+            added_by=member.added_by
+        ))
+    
+    return response
+
+
+@router.delete("/{project_id}/members/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_project_member(
+    project_id: UUID,
+    member_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Remove a member from a project.
+    
+    Only the project owner can remove members. Members cannot remove themselves
+    or other members. The owner cannot be removed.
+    
+    **FRONTEND INTEGRATION POINT:**
+    Add a "Remove" button next to each member in the members list.
+    
+    ```javascript
+    await fetch(`/api/projects/${projectId}/members/${memberId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+    });
+    ```
+    
+    Args:
+        project_id: UUID of the project
+        member_id: UUID of the ProjectMember record to remove
+        db: Database session dependency
+        current_user: Authenticated user (must be project owner)
+        
+    Returns:
+        204 No Content on successful removal
+        
+    Raises:
+        HTTPException 403: If current user is not the project owner
+        HTTPException 404: If member doesn't exist
+        HTTPException 409: If trying to remove the owner
+        
+    Example:
+        DELETE /api/projects/123e4567-e89b-12d3-a456-426614174000/members/member-uuid
+    """
+    # Check if current user is the project owner (only owners can remove members)
+    project, user_role = await check_project_access(
+        project_id,
+        current_user.user_id,
+        db,
+        require_owner=True  # Only owners can remove members
+    )
+    
+    # Fetch the member to remove
+    member = await db.get(ProjectMember, member_id)
+    if not member or member.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Member not found in this project"
+        )
+    
+    # Prevent removing the owner
+    if member.role == "owner":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot remove the project owner. Transfer ownership first or delete the project."
+        )
+    
+    # Remove the member
+    await db.delete(member)
+    await db.commit()
+    
+    return None  # 204 No Content
+
