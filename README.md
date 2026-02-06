@@ -175,7 +175,7 @@ Next steps
 
 Aarsh Patel - aarsh@email.sc.edu
 
-Alex Mesa - alex@email.sc.edu
+Alex Mesa - mesacora@email.sc.edu
 
 Paksh Patel - paksh@email.sc.edu
 
