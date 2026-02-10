@@ -452,6 +452,28 @@ class StorageService:
             logger.error(f"Error estimating storage for project {project_id}: {e}")
             raise
 
+    def get_presigned_url(self, path: str, expires_hours: int = 1) -> str:
+        """
+        Generate a presigned URL for temporary access to a file.
+        
+        Args:
+            path: Storage path
+            expires_hours: detailed expiration time in hours
+            
+        Returns:
+            str: Presigned URL
+        """
+        from datetime import timedelta
+        try:
+            url = self.client.presigned_get_object(
+                self.bucket_name,
+                path,
+                expires=timedelta(hours=expires_hours),
+            )
+            return url
+        except S3Error as e:
+            logger.error(f"Error generating presigned URL for {path}: {e}")
+            raise
 
 # Global storage service instance
 _storage_service: Optional[StorageService] = None

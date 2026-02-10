@@ -265,6 +265,39 @@ async def download_object(
         raise HTTPException(status_code=500, detail=f"Error downloading object: {str(e)}")
 
 
+@router.get("/{project_id}/files/download")
+async def get_signed_url(
+    project_id: UUID,
+    path: str,
+    db: AsyncSession = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get a presigned URL to download a file securely.
+    
+    This replaces the insecure generic download endpoint.
+    It verifies that the user has access to the project and that
+    the requested file belongs to the project.
+    """
+    # Verify access
+    project = await db.get(Project, project_id)
+    if not project or project.owner_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    # Security check: Ensure path belongs to this project
+    # We expect paths to start with "projects/{project_id}/..."
+    expected_prefix = f"projects/{project_id}/"
+    if not path.startswith(expected_prefix):
+         raise HTTPException(status_code=403, detail="Invalid file path for this project")
+
+    try:
+        url = storage.get_presigned_url(path)
+        return {"url": url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating secure URL: {str(e)}")
+
+
 # ============== Version History & Storage Stats ==============
 
 @router.get("/{project_id}/versions", response_model=List[VersionHistoryResponse])

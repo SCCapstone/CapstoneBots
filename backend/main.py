@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
-from routers import projects, users, storage, download
+from routers import projects, users, storage
 from database import init_db, close_db
 
 load_dotenv()
@@ -55,9 +55,7 @@ async def health_check():
 # Include routers
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(storage.router, prefix="/api/projects", tags=["storage"])
-app.include_router(download.router, prefix="/api/download", tags=["downloads"])
 app.include_router(users.router, prefix="/api/auth", tags=["auth"])
-#app.include_router(locks.router, prefix="/api/locks", tags=["locks"])
 
 
 if __name__ == "__main__":

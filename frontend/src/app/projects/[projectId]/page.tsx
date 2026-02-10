@@ -218,9 +218,14 @@ export default function ProjectPage() {
 
     try {
       const res = await fetch(
-        `${API_BASE}/api/download/download/signed-url/${encodeURIComponent(
+        `${API_BASE}/api/projects/${projectId}/files/download?path=${encodeURIComponent(
           file.s3Path
-        )}`
+        )}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
       );
 
       if (!res.ok) {
