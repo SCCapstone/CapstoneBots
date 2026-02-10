@@ -9,6 +9,7 @@ import json
 from uuid import uuid4
 from datetime import datetime
 from unittest.mock import Mock, patch, MagicMock
+from minio.error import S3Error
 
 from storage.storage_service import StorageService
 from storage.storage_utils import StorageUtils, DeduplicationManager, VersioningHelper
@@ -268,6 +269,106 @@ class TestStorageServiceIntegration:
         """Test deduplication with actual uploads"""
         # This would require MinIO to be running
         pass
+
+
+# ============== Presigned URL Tests ==============
+
+class TestPresignedURL:
+    """Tests for presigned URL functionality"""
+    
+    def test_get_presigned_url_valid_expiry(self):
+        """Test generating presigned URL with valid expiry time"""
+        from datetime import timedelta
+        
+        mock_client = Mock()
+        mock_client.presigned_get_object.return_value = "https://minio.example.com/bucket/path/to/file?signature=xyz"
+        
+        # Create storage without calling __init__
+        storage = object.__new__(StorageService)
+        storage.client = mock_client
+        storage.bucket_name = "test-bucket"
+        
+        url = storage.get_presigned_url("projects/123/file.json", expires_hours=2)
+        
+        assert url == "https://minio.example.com/bucket/path/to/file?signature=xyz"
+        mock_client.presigned_get_object.assert_called_once()
+        call_args = mock_client.presigned_get_object.call_args
+        assert call_args[1]["expires"] == timedelta(hours=2)
+    
+    def test_get_presigned_url_default_expiry(self):
+        """Test generating presigned URL with default 1 hour expiry"""
+        from datetime import timedelta
+        
+        mock_client = Mock()
+        mock_client.presigned_get_object.return_value = "https://minio.example.com/bucket/path"
+        
+        # Create storage without calling __init__
+        storage = object.__new__(StorageService)
+        storage.client = mock_client
+        storage.bucket_name = "test-bucket"
+        
+        url = storage.get_presigned_url("projects/123/file.json")
+        
+        # Verify it was called with 1 hour timedelta
+        call_args = mock_client.presigned_get_object.call_args
+        assert call_args[0][0] == "test-bucket"
+        assert call_args[0][1] == "projects/123/file.json"
+        assert call_args[1]["expires"] == timedelta(hours=1)
+    
+    def test_get_presigned_url_invalid_expiry_negative(self):
+        """Test that negative expiry hours raises ValueError"""
+        # Create storage without calling __init__
+        storage = object.__new__(StorageService)
+        storage.client = Mock()
+        storage.bucket_name = "test-bucket"
+        
+        with pytest.raises(ValueError, match="expires_hours must be an integer between 1 and 168"):
+            storage.get_presigned_url("projects/123/file.json", expires_hours=-1)
+    
+    def test_get_presigned_url_invalid_expiry_zero(self):
+        """Test that zero expiry hours raises ValueError"""
+        # Create storage without calling __init__
+        storage = object.__new__(StorageService)
+        storage.client = Mock()
+        storage.bucket_name = "test-bucket"
+        
+        with pytest.raises(ValueError, match="expires_hours must be an integer between 1 and 168"):
+            storage.get_presigned_url("projects/123/file.json", expires_hours=0)
+    
+    def test_get_presigned_url_invalid_expiry_too_large(self):
+        """Test that expiry hours > 168 raises ValueError"""
+        # Create storage without calling __init__
+        storage = object.__new__(StorageService)
+        storage.client = Mock()
+        storage.bucket_name = "test-bucket"
+        
+        with pytest.raises(ValueError, match="expires_hours must be an integer between 1 and 168"):
+            storage.get_presigned_url("projects/123/file.json", expires_hours=169)
+    
+    def test_get_presigned_url_invalid_expiry_non_integer(self):
+        """Test that non-integer expiry hours raises ValueError"""
+        # Create storage without calling __init__
+        storage = object.__new__(StorageService)
+        storage.client = Mock()
+        storage.bucket_name = "test-bucket"
+        
+        with pytest.raises(ValueError, match="expires_hours must be an integer between 1 and 168"):
+            storage.get_presigned_url("projects/123/file.json", expires_hours=1.5)
+    
+    def test_get_presigned_url_s3_error(self):
+        """Test that S3Error is properly raised"""
+        mock_client = Mock()
+        mock_client.presigned_get_object.side_effect = S3Error(
+            "NoSuchKey", "Object not found", "resource", "request_id", "host_id", "response"
+        )
+        
+        # Create storage without calling __init__
+        storage = object.__new__(StorageService)
+        storage.client = mock_client
+        storage.bucket_name = "test-bucket"
+        
+        with pytest.raises(S3Error):
+            storage.get_presigned_url("projects/123/nonexistent.json")
 
 
 # ============== Schema Validation Tests ==============
