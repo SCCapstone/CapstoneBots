@@ -288,8 +288,12 @@ async def get_signed_url(
     if not project or project.owner_id != current_user.user_id:
         raise HTTPException(status_code=403, detail="Not authorized")
     
+    # Validate path is provided
+    if not path or not path.strip():
+        raise HTTPException(status_code=400, detail="File path is required")
+    
     # Normalize path and perform security check to ensure it belongs to this project
-    normalized_path = path or ""
+    normalized_path = path.strip()
     
     # Handle full S3 URLs like "s3://bucket/key..."
     if normalized_path.startswith("s3://"):
@@ -300,7 +304,7 @@ async def get_signed_url(
         if first_slash != -1:
             normalized_path = without_scheme[first_slash + 1:]
         else:
-            normalized_path = ""
+            raise HTTPException(status_code=400, detail="Invalid S3 URL format")
     
     # Security check: Ensure path belongs to this project
     # Allow both "projects/{project_id}/..." and "{project_id}/..." formats
@@ -322,6 +326,9 @@ async def get_signed_url(
         # Check if object doesn't exist
         if e.code == "NoSuchKey":
             raise HTTPException(status_code=404, detail="File not found")
+        # Check for permission issues
+        if e.code == "AccessDenied":
+            raise HTTPException(status_code=403, detail="Access denied to file")
         raise HTTPException(status_code=500, detail="Error generating download URL")
     except Exception as e:
         logger.error(f"Unexpected error generating presigned URL: {e}")
