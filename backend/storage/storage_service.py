@@ -23,6 +23,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Maximum hours for presigned URL expiration (7 days)
+MAX_PRESIGNED_URL_HOURS = 168
+
 
 class StorageService:
     """
@@ -458,7 +461,7 @@ class StorageService:
         
         Args:
             path: Storage path
-            expires_hours: URL expiration time in hours (must be between 1 and 168)
+            expires_hours: URL expiration time in hours (must be between 1 and MAX_PRESIGNED_URL_HOURS)
             
         Returns:
             str: Presigned URL
@@ -468,8 +471,8 @@ class StorageService:
             S3Error: If there's an error generating the URL
         """
         # Validate expires_hours
-        if not isinstance(expires_hours, int) or expires_hours < 1 or expires_hours > 168:
-            raise ValueError("expires_hours must be an integer between 1 and 168 (7 days)")
+        if not isinstance(expires_hours, int) or expires_hours < 1 or expires_hours > MAX_PRESIGNED_URL_HOURS:
+            raise ValueError(f"expires_hours must be an integer between 1 and {MAX_PRESIGNED_URL_HOURS} (7 days)")
         
         try:
             url = self.client.presigned_get_object(

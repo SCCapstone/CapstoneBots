@@ -11,7 +11,7 @@ from datetime import datetime
 from unittest.mock import Mock, patch, MagicMock
 from minio.error import S3Error
 
-from storage.storage_service import StorageService
+from storage.storage_service import StorageService, MAX_PRESIGNED_URL_HOURS
 from storage.storage_utils import StorageUtils, DeduplicationManager, VersioningHelper
 
 
@@ -322,7 +322,7 @@ class TestPresignedURL:
         storage.client = Mock()
         storage.bucket_name = "test-bucket"
         
-        with pytest.raises(ValueError, match="expires_hours must be an integer between 1 and 168"):
+        with pytest.raises(ValueError, match=f"expires_hours must be an integer between 1 and {MAX_PRESIGNED_URL_HOURS}"):
             storage.get_presigned_url("projects/123/file.json", expires_hours=-1)
     
     def test_get_presigned_url_invalid_expiry_zero(self):
@@ -332,18 +332,18 @@ class TestPresignedURL:
         storage.client = Mock()
         storage.bucket_name = "test-bucket"
         
-        with pytest.raises(ValueError, match="expires_hours must be an integer between 1 and 168"):
+        with pytest.raises(ValueError, match=f"expires_hours must be an integer between 1 and {MAX_PRESIGNED_URL_HOURS}"):
             storage.get_presigned_url("projects/123/file.json", expires_hours=0)
     
     def test_get_presigned_url_invalid_expiry_too_large(self):
-        """Test that expiry hours > 168 raises ValueError"""
+        """Test that expiry hours > MAX_PRESIGNED_URL_HOURS raises ValueError"""
         # Create storage without calling __init__
         storage = object.__new__(StorageService)
         storage.client = Mock()
         storage.bucket_name = "test-bucket"
         
-        with pytest.raises(ValueError, match="expires_hours must be an integer between 1 and 168"):
-            storage.get_presigned_url("projects/123/file.json", expires_hours=169)
+        with pytest.raises(ValueError, match=f"expires_hours must be an integer between 1 and {MAX_PRESIGNED_URL_HOURS}"):
+            storage.get_presigned_url("projects/123/file.json", expires_hours=MAX_PRESIGNED_URL_HOURS + 1)
     
     def test_get_presigned_url_invalid_expiry_non_integer(self):
         """Test that non-integer expiry hours raises ValueError"""
@@ -352,7 +352,7 @@ class TestPresignedURL:
         storage.client = Mock()
         storage.bucket_name = "test-bucket"
         
-        with pytest.raises(ValueError, match="expires_hours must be an integer between 1 and 168"):
+        with pytest.raises(ValueError, match=f"expires_hours must be an integer between 1 and {MAX_PRESIGNED_URL_HOURS}"):
             storage.get_presigned_url("projects/123/file.json", expires_hours=1.5)
     
     def test_get_presigned_url_s3_error(self):

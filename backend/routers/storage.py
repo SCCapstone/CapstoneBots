@@ -304,7 +304,10 @@ async def get_signed_url(
         if first_slash != -1:
             normalized_path = without_scheme[first_slash + 1:]
         else:
-            raise HTTPException(status_code=400, detail="Invalid S3 URL format")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid S3 URL format: expected s3://bucket/key/path but no key path found"
+            )
     
     # Security check: Ensure path belongs to this project
     # Allow both "projects/{project_id}/..." and "{project_id}/..." formats
@@ -312,7 +315,7 @@ async def get_signed_url(
         f"projects/{project_id}/",
         f"{project_id}/",
     ]
-    if not any(normalized_path.startswith(prefix) for prefix in expected_prefixes):
+    if not normalized_path or not any(normalized_path.startswith(prefix) for prefix in expected_prefixes):
         raise HTTPException(
             status_code=403,
             detail="Invalid file path for this project",
