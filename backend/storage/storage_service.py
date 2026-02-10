@@ -13,7 +13,7 @@ import json
 import hashlib
 import io
 from typing import Optional, Tuple, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 from pathlib import Path
 
@@ -458,12 +458,19 @@ class StorageService:
         
         Args:
             path: Storage path
-            expires_hours: detailed expiration time in hours
+            expires_hours: URL expiration time in hours (must be between 1 and 168)
             
         Returns:
             str: Presigned URL
+            
+        Raises:
+            ValueError: If expires_hours is invalid
+            S3Error: If there's an error generating the URL
         """
-        from datetime import timedelta
+        # Validate expires_hours
+        if not isinstance(expires_hours, int) or expires_hours < 1 or expires_hours > 168:
+            raise ValueError("expires_hours must be an integer between 1 and 168 (7 days)")
+        
         try:
             url = self.client.presigned_get_object(
                 self.bucket_name,

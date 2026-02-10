@@ -211,6 +211,11 @@ export default function ProjectPage() {
     process.env.NEXT_PUBLIC_BACKEND_URL;
 
   const handleDownloadFile = async (file: FileRow) => {
+    if (!token) {
+      console.error("You must be logged in to download files.");
+      return;
+    }
+
     if (!file.s3Path) {
       console.warn("No S3 path for this file; nothing to download.");
       return;
