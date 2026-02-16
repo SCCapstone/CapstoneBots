@@ -13,7 +13,7 @@ import json
 import hashlib
 import io
 from typing import Optional, Tuple, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 from pathlib import Path
 
@@ -22,6 +22,9 @@ from minio.error import S3Error
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Maximum hours for presigned URL expiration (7 days)
+MAX_PRESIGNED_URL_HOURS = 168
 
 
 class StorageService:
@@ -458,12 +461,19 @@ class StorageService:
         
         Args:
             path: Storage path
-            expires_hours: detailed expiration time in hours
+            expires_hours: URL expiration time in hours (must be between 1 and MAX_PRESIGNED_URL_HOURS)
             
         Returns:
             str: Presigned URL
+            
+        Raises:
+            ValueError: If expires_hours is invalid
+            S3Error: If there's an error generating the URL
         """
-        from datetime import timedelta
+        # Validate expires_hours
+        if not isinstance(expires_hours, int) or expires_hours < 1 or expires_hours > MAX_PRESIGNED_URL_HOURS:
+            raise ValueError(f"expires_hours must be an integer between 1 and {MAX_PRESIGNED_URL_HOURS} (7 days)")
+        
         try:
             url = self.client.presigned_get_object(
                 self.bucket_name,
