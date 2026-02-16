@@ -211,6 +211,11 @@ export default function ProjectPage() {
     process.env.NEXT_PUBLIC_BACKEND_URL;
 
   const handleDownloadFile = async (file: FileRow) => {
+    if (!token) {
+      console.error("You must be logged in to download files.");
+      return;
+    }
+
     if (!file.s3Path) {
       console.warn("No S3 path for this file; nothing to download.");
       return;
@@ -218,9 +223,14 @@ export default function ProjectPage() {
 
     try {
       const res = await fetch(
-        `${API_BASE}/api/download/download/signed-url/${encodeURIComponent(
+        `${API_BASE}/api/projects/${projectId}/files/download?path=${encodeURIComponent(
           file.s3Path
-        )}`
+        )}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
       );
 
       if (!res.ok) {

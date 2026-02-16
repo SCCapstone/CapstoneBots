@@ -14,6 +14,7 @@ from uuid import UUID
 import hashlib
 import json
 from datetime import datetime
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -21,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 import io
+from minio.error import S3Error
 
 from database import get_db
 from models import Project, Commit, BlenderObject, Branch
@@ -33,6 +35,7 @@ from utils.auth import get_current_user
 from models import User
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ============== Object Upload Routes ==============
@@ -263,6 +266,76 @@ async def download_object(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error downloading object: {str(e)}")
+
+
+@router.get("/{project_id}/files/download")
+async def get_signed_url(
+    project_id: UUID,
+    path: str,
+    db: AsyncSession = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get a presigned URL to download a file securely.
+    
+    This replaces the insecure generic download endpoint.
+    It verifies that the user has access to the project and that
+    the requested file belongs to the project.
+    """
+    # Verify access
+    project = await db.get(Project, project_id)
+    if not project or project.owner_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # Validate path is provided
+    if not path or not path.strip():
+        raise HTTPException(status_code=400, detail="File path is required")
+    
+    # Normalize path and perform security check to ensure it belongs to this project
+    normalized_path = path.strip()
+    
+    # Handle full S3 URLs like "s3://bucket/key..."
+    if normalized_path.startswith("s3://"):
+        # Strip scheme
+        without_scheme = normalized_path[5:]
+        # Remove bucket name (up to first "/"), leaving just the key
+        first_slash = without_scheme.find("/")
+        if first_slash != -1:
+            normalized_path = without_scheme[first_slash + 1:]
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid S3 URL format: expected s3://bucket/key/path but no key path found"
+            )
+    
+    # Security check: Ensure path belongs to this project
+    # Allow both "projects/{project_id}/..." and "{project_id}/..." formats
+    expected_prefixes = [
+        f"projects/{project_id}/",
+        f"{project_id}/",
+    ]
+    if not normalized_path or not any(normalized_path.startswith(prefix) for prefix in expected_prefixes):
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid file path for this project",
+        )
+    
+    try:
+        url = storage.get_presigned_url(normalized_path)
+        return {"url": url}
+    except S3Error as e:
+        logger.error(f"S3 error generating presigned URL: {e}")
+        # Check if object doesn't exist
+        if e.code == "NoSuchKey":
+            raise HTTPException(status_code=404, detail="File not found")
+        # Check for permission issues
+        if e.code == "AccessDenied":
+            raise HTTPException(status_code=403, detail="Access denied to file")
+        raise HTTPException(status_code=500, detail="Error generating download URL")
+    except Exception as e:
+        logger.error(f"Unexpected error generating presigned URL: {e}")
+        raise HTTPException(status_code=500, detail="Error generating download URL")
 
 
 # ============== Version History & Storage Stats ==============
