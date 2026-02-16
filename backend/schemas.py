@@ -231,3 +231,47 @@ class VersionHistoryResponse(BaseModel):
     snapshot_size: Optional[int]
 
 
+# ============== Project Collaboration Schemas ==============
+class ProjectMemberAdd(BaseModel):
+    """
+    Schema for adding a member to a project.
+    
+    FRONTEND INTEGRATION POINT:
+    When user clicks "Add Member" button, send POST request to:
+    /api/projects/{project_id}/members
+    
+    Request body example:
+    {
+        "email": "teammate@example.com"
+    }
+    """
+    email: EmailStr
+
+class ProjectMemberResponse(BaseModel):
+    """Response containing project member information"""
+    member_id: UUID
+    project_id: UUID
+    user_id: UUID
+    username: str
+    email: EmailStr
+    role: str
+    added_at: datetime
+    added_by: Optional[UUID]
+
+    class Config:
+        from_attributes = True
+
+class ProjectMemberRemove(BaseModel):
+    """Schema for removing a member from a project"""
+    user_id: UUID
+
+class ProjectWithMembersResponse(ProjectResponse):
+    """Extended project response that includes member list"""
+    members: List[ProjectMemberResponse]
+    is_owner: bool
+    current_user_role: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
