@@ -41,3 +41,20 @@ To run migrations (if Alembic is configured):
 ```bash
 alembic upgrade head
 ```
+
+## Testing
+
+Automated testing is used to verify core backend functionality and catch regressions early.  
+We use **pytest** for unit testing and **FastAPI’s TestClient (httpx)** for behavioral/API testing.
+
+### Running Tests
+
+From the `backend/` directory:
+Tests live in: backend/tests/
+
+```bash
+source .venv/bin/activate
+pytest -q
+pytest -v
+```
+Note: Some integration tests are skipped unless MinIO is running.

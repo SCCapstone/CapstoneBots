@@ -155,14 +155,14 @@ export async function fetchCommitObjects(
   commitId: string
 ): Promise<BlenderObject[]> {
   const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/projects/${projectId}/commits/${commitId}/objects`,
+    `${API_BASE}/api/projects/${projectId}/commits/${commitId}/objects`,
     {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
       },
     }
-  );
+  ); 
 
   if (!res.ok) {
     throw new Error("Failed to fetch commit objects");

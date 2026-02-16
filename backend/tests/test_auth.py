@@ -1,6 +1,7 @@
 import sys
 import os
 from fastapi.testclient import TestClient
+from uuid import uuid4
 
 # Ensure the application root is on sys.path when pytest runs from inside /app/tests
 root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -20,9 +21,9 @@ from utils import auth
 
 def test_register_and_login():
     # Ensure we can register a new user and then login to receive a token
-    username = "testuser"
-    email = "test@example.com"
-    password = "s3cret"
+    username = f"testuser_{uuid4().hex[:8]}"
+    email = f"test_{uuid4().hex[:8]}@example.com"
+    password = "s3cret123"
 
     with TestClient(app) as client:
         # Register
@@ -46,8 +47,8 @@ def test_register_and_login():
 
 def test_me_endpoint():
     # Test the /me endpoint returns authenticated user's information
-    username = "meuser"
-    email = "me@example.com"
+    username = f"meuser_{uuid4().hex[:8]}"
+    email = f"me_{uuid4().hex[:8]}@example.com"
     password = "mypassword"
 
     with TestClient(app) as client:
