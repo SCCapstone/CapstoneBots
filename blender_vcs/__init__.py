@@ -488,22 +488,22 @@ class BVCS_OT_RefreshS3(bpy.types.Operator):
     bl_idname = "bvcs.refresh_s3"
     bl_label = "Refresh S3 Credentials"
 
-def execute(self, context):
-    prefs = get_prefs(context)
-    if not prefs.auth_token:
-        self.report({'ERROR'}, "Not logged in")
-        return {'CANCELLED'}
-    fetch_user_s3_credentials(prefs)
+    def execute(self, context):
+        prefs = get_prefs(context)
+        if not prefs.auth_token:
+            self.report({'ERROR'}, "Not logged in")
+            return {'CANCELLED'}
+        fetch_user_s3_credentials(prefs)
 
-    # Force Blender preferences UI to refresh so new values are visible
-    try:
-        context.preferences.is_dirty = True
-    except Exception:
-        # non-fatal; just continue
-        pass
+        # Force Blender preferences UI to refresh so new values are visible
+        try:
+            context.preferences.is_dirty = True
+        except Exception:
+            # non-fatal; just continue
+            pass
 
-    self.report({'INFO'}, "S3 credentials refreshed")
-    return {'FINISHED'}
+        self.report({'INFO'}, "S3 credentials refreshed")
+        return {'FINISHED'}
 
 # ---------------- Push / Pull / Conflicts ----------------
 class BVCS_OT_Push(bpy.types.Operator):
