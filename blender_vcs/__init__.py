@@ -15,21 +15,86 @@ import requests
 import json
 import hashlib
 import base64
+import importlib
 from uuid import uuid4
 import logging
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 
-# Optional dependency
-try:
-    import boto3
-    from botocore.exceptions import BotoCoreError, ClientError
-    from botocore.config import Config as BotocoreConfig
-    HAS_BOTO3 = True
-except Exception:
-    HAS_BOTO3 = False
+ADDON_VENDOR_DIR = os.path.join(os.path.dirname(__file__), "_vendor")
+if os.path.isdir(ADDON_VENDOR_DIR) and ADDON_VENDOR_DIR not in sys.path:
+    sys.path.insert(0, ADDON_VENDOR_DIR)
+
+HAS_BOTO3 = False
+BOTO3_INSTALL_ATTEMPTED = False
+
+def _try_import_boto3():
+    global boto3, BotoCoreError, ClientError, BotocoreConfig, HAS_BOTO3
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+        from botocore.config import Config as BotocoreConfig
+        HAS_BOTO3 = True
+    except Exception:
+        HAS_BOTO3 = False
+    return HAS_BOTO3
+
+def ensure_boto3_installed():
+    """
+    Ensure boto3 exists in Blender's Python environment.
+    Installs into add-on local _vendor directory to avoid system-wide changes.
+    """
+    global BOTO3_INSTALL_ATTEMPTED
+
+    if _try_import_boto3():
+        return True, None
+
+    if BOTO3_INSTALL_ATTEMPTED:
+        return False, "boto3 is not available and automatic install already failed in this session."
+    BOTO3_INSTALL_ATTEMPTED = True
+
+    try:
+        os.makedirs(ADDON_VENDOR_DIR, exist_ok=True)
+
+        # Ensure pip exists in Blender Python, then install boto3 into _vendor.
+        subprocess.run(
+            [sys.executable, "-m", "ensurepip", "--upgrade"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "pip", "install",
+                "--disable-pip-version-check",
+                "--target", ADDON_VENDOR_DIR,
+                "boto3"
+            ],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            if len(err) > 300:
+                err = err[-300:]
+            return False, f"Automatic boto3 install failed: {err or 'pip returned non-zero exit code'}"
+
+        if ADDON_VENDOR_DIR not in sys.path:
+            sys.path.insert(0, ADDON_VENDOR_DIR)
+        importlib.invalidate_caches()
+        if _try_import_boto3():
+            logger.info("boto3 installed into add-on _vendor successfully.")
+            return True, None
+        return False, "boto3 install completed but import still failed."
+    except Exception as e:
+        return False, f"Automatic boto3 install failed: {e}"
+
+_try_import_boto3()
 
 BL_ID = "blender_vcs" 
 
@@ -178,7 +243,9 @@ def make_s3_client(prefs):
     secure = prefs.s3_secure
 
     if not HAS_BOTO3:
-        return None, "boto3 is not installed in this Blender Python environment."
+        ok, install_err = ensure_boto3_installed()
+        if not ok:
+            return None, install_err
 
     if not access_key or not secret_key or not bucket:
         return None, "S3 credentials or bucket not configured in preferences or environment."
@@ -488,22 +555,22 @@ class BVCS_OT_RefreshS3(bpy.types.Operator):
     bl_idname = "bvcs.refresh_s3"
     bl_label = "Refresh S3 Credentials"
 
-def execute(self, context):
-    prefs = get_prefs(context)
-    if not prefs.auth_token:
-        self.report({'ERROR'}, "Not logged in")
-        return {'CANCELLED'}
-    fetch_user_s3_credentials(prefs)
+    def execute(self, context):
+        prefs = get_prefs(context)
+        if not prefs.auth_token:
+            self.report({'ERROR'}, "Not logged in")
+            return {'CANCELLED'}
+        fetch_user_s3_credentials(prefs)
 
-    # Force Blender preferences UI to refresh so new values are visible
-    try:
-        context.preferences.is_dirty = True
-    except Exception:
-        # non-fatal; just continue
-        pass
+        # Force Blender preferences UI to refresh so new values are visible
+        try:
+            context.preferences.is_dirty = True
+        except Exception:
+            # non-fatal; just continue
+            pass
 
-    self.report({'INFO'}, "S3 credentials refreshed")
-    return {'FINISHED'}
+        self.report({'INFO'}, "S3 credentials refreshed")
+        return {'FINISHED'}
 
 # ---------------- Push / Pull / Conflicts ----------------
 class BVCS_OT_Push(bpy.types.Operator):

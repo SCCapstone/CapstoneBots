@@ -310,10 +310,13 @@ async def get_signed_url(
             )
     
     # Security check: Ensure path belongs to this project
-    # Allow both "projects/{project_id}/..." and "{project_id}/..." formats
+    # Accept "projects/{project_id}/...", "{project_id}/...", and "{project_id}_..." formats
+    # The underscore variant is used for .blend file uploads: "{project_id}_{timestamp}/file.blend"
     expected_prefixes = [
         f"projects/{project_id}/",
+        f"projects/{project_id}_",
         f"{project_id}/",
+        f"{project_id}_",
     ]
     if not normalized_path or not any(normalized_path.startswith(prefix) for prefix in expected_prefixes):
         raise HTTPException(

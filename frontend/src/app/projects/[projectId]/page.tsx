@@ -1,10 +1,10 @@
 "use client";
 
-import {useEffect, useState, type FormEvent} from "react";
-import {useParams, useRouter} from "next/navigation";
+import { useEffect, useState, type FormEvent } from "react";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import {useAuth} from "@/components/AuthProvider";
-import type {Commit, Project} from "@/lib/projectsApi";
+import { useAuth } from "@/components/AuthProvider";
+import type { Commit, Project } from "@/lib/projectsApi";
 import {
   // addProjectMember,
   deleteProject,
@@ -12,7 +12,7 @@ import {
   fetchProjects,
   fetchCommitObjects,
 } from "@/lib/projectsApi";
-import {fetchCurrentUser} from "@/lib/authApi";
+import { fetchCurrentUser } from "@/lib/authApi";
 
 function formatCommitDate(dateString: string): string {
   const date = new Date(dateString);
@@ -216,7 +216,7 @@ export default function ProjectPage() {
       setDeleting(false);
     }
   };
-  
+
   const API_BASE =
     process.env.NEXT_PUBLIC_BACKEND_URL;
 
@@ -436,11 +436,10 @@ export default function ProjectPage() {
                   {/* Name + icon */}
                   <div className="flex items-center gap-2 text-slate-100">
                     <span
-                      className={`flex h-4 w-4 items-center justify-center rounded-sm ${
-                        file.type === "folder"
-                          ? "bg-yellow-500/20 text-yellow-300"
-                          : "bg-slate-700/60 text-slate-300"
-                      }`}
+                      className={`flex h-4 w-4 items-center justify-center rounded-sm ${file.type === "folder"
+                        ? "bg-yellow-500/20 text-yellow-300"
+                        : "bg-slate-700/60 text-slate-300"
+                        }`}
                     >
                       {file.type === "folder" ? "▣" : "▤"}
                     </span>
@@ -473,127 +472,127 @@ export default function ProjectPage() {
           </div>
 
           {error && (
-          <p className="text-[11px] text-red-400">{error}</p>
+            <p className="text-[11px] text-red-400">{error}</p>
+          )}
+        </div>
+
+        {/* Confirm Delete Overlay */}
+        {showConfirm && (
+          <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60">
+            <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-xl">
+              <h2 className="mb-2 text-sm font-semibold text-white">
+                Delete project?
+              </h2>
+              <p className="mb-4 text-xs text-slate-400">
+                This will permanently delete this project and its data. This
+                action cannot be undone.
+              </p>
+
+              {error && (
+                <p className="mb-3 text-[11px] text-red-400">{error}</p>
+              )}
+
+              <div className="mt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => {
+                    if (!deleting) {
+                      setShowConfirm(false);
+                      setError("");
+                    }
+                  }}
+                  className="rounded-lg border border-slate-700 px-3 py-1 text-[11px] text-slate-300 hover:border-slate-500 disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={deleting}
+                  className="rounded-lg bg-red-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {deleting ? "Deleting..." : "Delete Project"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 🔹 Commits Overlay */}
+        {showCommits && (
+          <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60">
+            <div className="w-full max-w-2xl rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-xl">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-white">
+                  Commits for {displayName}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCommits(false);
+                    setCommitsError("");
+                  }}
+                  className="text-xs text-slate-400 hover:text-slate-100"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {commitsLoading && (
+                <p className="text-xs text-slate-400">
+                  Loading commits...
+                </p>
+              )}
+
+              {commitsError && (
+                <p className="mb-2 text-xs text-red-400">
+                  {commitsError}
+                </p>
+              )}
+
+              {!commitsLoading && !commitsError && commits.length === 0 && (
+                <p className="text-xs text-slate-400">
+                  No commits yet for this project.
+                </p>
+              )}
+
+              {!commitsLoading && !commitsError && commits.length > 0 && (
+                <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                  {commits.map((c) => {
+                    const date = new Date(c.committed_at);
+                    const formatted = isNaN(date.getTime())
+                      ? c.committed_at
+                      : date.toLocaleString();
+                    const shortHash = c.commit_hash.slice(0, 7);
+
+                    return (
+                      <div
+                        key={c.commit_id}
+                        className="flex items-start justify-between rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs hover:border-sky-500/60 hover:bg-slate-900"
+                      >
+                        <div className="flex-1 pr-3">
+                          <p className="font-medium text-slate-100">
+                            {c.commit_message || "(no message)"}
+                          </p>
+                          <p className="mt-1 text-[11px] text-slate-500">
+                            <span className="inline-flex items-center gap-1">
+                              <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
+                                {shortHash}
+                              </span>
+                              <span>{formatted}</span>
+                            </span>
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </div>
-
-      {/* Confirm Delete Overlay */}
-      {showConfirm && (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60">
-          <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-xl">
-            <h2 className="mb-2 text-sm font-semibold text-white">
-              Delete project?
-            </h2>
-            <p className="mb-4 text-xs text-slate-400">
-              This will permanently delete this project and its data. This
-              action cannot be undone.
-            </p>
-
-            {error && (
-              <p className="mb-3 text-[11px] text-red-400">{error}</p>
-            )}
-
-            <div className="mt-2 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                disabled={deleting}
-                onClick={() => {
-                  if (!deleting) {
-                    setShowConfirm(false);
-                    setError("");
-                  }
-                }}
-                className="rounded-lg border border-slate-700 px-3 py-1 text-[11px] text-slate-300 hover:border-slate-500 disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleDelete}
-                disabled={deleting}
-                className="rounded-lg bg-red-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {deleting ? "Deleting..." : "Delete Project"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 🔹 Commits Overlay */}
-      {showCommits && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60">
-          <div className="w-full max-w-2xl rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-xl">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-white">
-                Commits for {displayName}
-              </h2>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowCommits(false);
-                  setCommitsError("");
-                }}
-                className="text-xs text-slate-400 hover:text-slate-100"
-              >
-                ✕
-              </button>
-            </div>
-
-            {commitsLoading && (
-              <p className="text-xs text-slate-400">
-                Loading commits...
-              </p>
-            )}
-
-            {commitsError && (
-              <p className="mb-2 text-xs text-red-400">
-                {commitsError}
-              </p>
-            )}
-
-            {!commitsLoading && !commitsError && commits.length === 0 && (
-              <p className="text-xs text-slate-400">
-                No commits yet for this project.
-              </p>
-            )}
-
-            {!commitsLoading && !commitsError && commits.length > 0 && (
-              <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-                {commits.map((c) => {
-                  const date = new Date(c.committed_at);
-                  const formatted = isNaN(date.getTime())
-                    ? c.committed_at
-                    : date.toLocaleString();
-                  const shortHash = c.commit_hash.slice(0, 7);
-
-                  return (
-                    <div
-                      key={c.commit_id}
-                      className="flex items-start justify-between rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs hover:border-sky-500/60 hover:bg-slate-900"
-                    >
-                      <div className="flex-1 pr-3">
-                        <p className="font-medium text-slate-100">
-                          {c.commit_message || "(no message)"}
-                        </p>
-                        <p className="mt-1 text-[11px] text-slate-500">
-                          <span className="inline-flex items-center gap-1">
-                            <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
-                              {shortHash}
-                            </span>
-                            <span>{formatted}</span>
-                          </span>
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-      </div>
-    </div>  
+    </div>
   );
 }
