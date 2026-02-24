@@ -707,13 +707,45 @@ def _get_latest_remote_blend_file_info(prefs):
     if not blend_obj:
         return None
 
+    # include author information so we can make user-aware conflict decisions
     return {
         "s3_path": blend_obj.get("json_data_path"),
         "object_name": blend_obj.get("object_name") or os.path.basename(blend_obj.get("json_data_path")),
         "commit_id": latest_commit.get("commit_id"),
         "commit_hash": latest_commit.get("commit_hash"),
         "commit_message": latest_commit.get("commit_message"),
+        "author_id": latest_commit.get("author_id"),
+        # some API responses may include a username for convenience
+        "author_username": latest_commit.get("author_username"),
     }
+
+
+# ---------- remote chronology helpers ----------
+
+def _get_latest_remote_commit_hash(prefs):
+    """Return the hash string of the tip of main branch on the remote (or "").
+
+    This simply delegates to ``_get_latest_remote_blend_file_info`` and pulls
+    the commit_hash field.  It is used by synchronization logic to decide if
+    the local state is still based on the same remote commit.
+    """
+    try:
+        info = _get_latest_remote_blend_file_info(prefs) or {}
+        return str(info.get("commit_hash") or "")
+    except Exception:
+        return ""
+
+
+def _remote_ahead_of_sync(wm, prefs):
+    """Return (ahead, remote_hash, synced_hash).
+
+    ``ahead`` indicates whether the remote head is non-empty _and_ differs
+    from whatever we last recorded in the window manager (via a pull or a
+    successful push).
+    """
+    synced = _get_last_synced_commit_hash(wm)
+    remote = _get_latest_remote_commit_hash(prefs)
+    return (bool(remote and remote != synced), remote, synced)
 
 
 def _get_last_synced_commit_hash(wm):
@@ -736,16 +768,24 @@ def _open_project_file_info(context, prefs, file_info: dict):
     if not isinstance(file_info, dict):
         raise RuntimeError("Invalid file info")
 
+    # download the blend file; we defer writing to the window manager until
+    # after the file has been opened, because opening a new file resets the
+    # window manager and would otherwise wipe out any properties we set.
     s3_uri = file_info.get("s3_path")
     local_path = _download_project_file_info(prefs, file_info, temp_subdir="bvcs_backend_open")
 
-    wm = context.window_manager
+    # open the downloaded file, blocking until the new file is active.
+    bpy.ops.wm.open_mainfile(filepath=local_path)
+
+    # now that the new blend is loaded, update sync state on the current wm
+    wm = bpy.context.window_manager
     wm["bvcs_last_pulled"] = {
         "commit_id": file_info.get("commit_id"),
         "commit_hash": file_info.get("commit_hash"),
         "commit_message": file_info.get("commit_message"),
         "pulled_at": datetime.now(timezone.utc).isoformat(),
     }
+    # record the hash so we know what the remote head was when we pulled.
     wm["bvcs_last_synced_commit_hash"] = file_info.get("commit_hash") or ""
     if "bvcs_push_conflict" in wm:
         del wm["bvcs_push_conflict"]
@@ -758,8 +798,6 @@ def _open_project_file_info(context, prefs, file_info: dict):
     if isinstance(pending, dict):
         pending["base_commit_hash"] = file_info.get("commit_hash") or ""
         wm["bvcs_pending_commit"] = pending
-
-    bpy.ops.wm.open_mainfile(filepath=local_path)
 
 
 def _open_selected_project_file(context, prefs, selected_id: str):
@@ -931,24 +969,33 @@ class BVCS_OT_Push(bpy.types.Operator):
             self.report({'ERROR'}, f"Failed to check remote state: {e}")
             return {'CANCELLED'}
 
-        remote_commit_hash = (latest_remote or {}).get("commit_hash") or ""
-        base_commit_hash = str(pending_commit.get("base_commit_hash") or "")
-        if remote_commit_hash and base_commit_hash != remote_commit_hash:
-            wm["bvcs_push_conflict"] = {
-                "base_commit_hash": base_commit_hash,
-                "remote_commit_hash": remote_commit_hash,
-                "remote_commit_id": (latest_remote or {}).get("commit_id"),
-                "remote_commit_message": (latest_remote or {}).get("commit_message"),
-                "remote_s3_path": (latest_remote or {}).get("s3_path"),
-                "remote_object_name": (latest_remote or {}).get("object_name"),
-                "local_file_path": pending_commit.get("file_path") or local_file_path,
-                "detected_at": datetime.now(timezone.utc).isoformat(),
-            }
-            self.report(
-                {'ERROR'},
-                "Push blocked: remote changed since your last pull. Pull latest, merge, then recommit before pushing."
-            )
-            return {'CANCELLED'}
+        # determine whether to perform a merge-style conflict check. if the
+        # last remote commit was authored by the same user who is currently
+        # pushing we treat the situation as safe (e.g. user pushing from a
+        # second machine) and allow a fast-forward.
+        user = get_logged_in_user(prefs)
+        remote_author = (latest_remote or {}).get("author_id")
+        if user and remote_author and user.get("user_id") == remote_author:
+            logger.info("Remote head authored by same user, skipping merge conflict check")
+        else:
+            remote_commit_hash = (latest_remote or {}).get("commit_hash") or ""
+            base_commit_hash = str(pending_commit.get("base_commit_hash") or "")
+            if remote_commit_hash and base_commit_hash != remote_commit_hash:
+                wm["bvcs_push_conflict"] = {
+                    "base_commit_hash": base_commit_hash,
+                    "remote_commit_hash": remote_commit_hash,
+                    "remote_commit_id": (latest_remote or {}).get("commit_id"),
+                    "remote_commit_message": (latest_remote or {}).get("commit_message"),
+                    "remote_s3_path": (latest_remote or {}).get("s3_path"),
+                    "remote_object_name": (latest_remote or {}).get("object_name"),
+                    "local_file_path": pending_commit.get("file_path") or local_file_path,
+                    "detected_at": datetime.now(timezone.utc).isoformat(),
+                }
+                self.report(
+                    {'ERROR'},
+                    "Push blocked: remote changed since your last pull. Pull latest, merge, then recommit before pushing."
+                )
+                return {'CANCELLED'}
             
         s3_info, err = make_s3_client(prefs)
         if err:
