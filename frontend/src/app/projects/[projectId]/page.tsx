@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
 import type { Commit, Project } from "@/lib/projectsApi";
 import {
-  // addProjectMember,
+  addProjectMember,
   deleteProject,
   fetchCommits,
   fetchProjects,
@@ -74,9 +74,9 @@ export default function ProjectPage() {
   const [files, setFiles] = useState<FileRow[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
 
-  // const [memberEmail, setMemberEmail] = useState("");
-  // const [addingMember, setAddingMember] = useState(false);
-  // const [memberMessage, setMemberMessage] = useState("");
+  const [memberEmail, setMemberEmail] = useState("");
+  const [addingMember, setAddingMember] = useState(false);
+  const [memberMessage, setMemberMessage] = useState("");
 
 
   // Load project name so we can show "Project Alpha" style headings
@@ -263,35 +263,35 @@ export default function ProjectPage() {
     setShowCommits(true);
   };
 
-  // const handleAddMember = async (event: FormEvent<HTMLFormElement>) => {
-  //   event.preventDefault();
-  //
-  //   if (!token) {
-  //     setMemberMessage("You must be logged in to add a member.");
-  //     return;
-  //   }
-  //
-  //   if (!memberEmail.trim()) {
-  //     setMemberMessage("Please enter an email address.");
-  //     return;
-  //   }
-  //
-  //   setAddingMember(true);
-  //   setMemberMessage("");
-  //
-  //   try {
-  //     const result = await addProjectMember(token, projectId, {
-  //       email: memberEmail.trim(),
-  //     });
-  //
-  //     setMemberEmail("");
-  //     setMemberMessage(`Added ${result.email} to this project.`);
-  //   } catch (err: any) {
-  //     setMemberMessage(err?.message || "Failed to add member.");
-  //   } finally {
-  //     setAddingMember(false);
-  //   }
-  // };
+  const handleAddMember = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!token) {
+      setMemberMessage("You must be logged in to add a member.");
+      return;
+    }
+
+    if (!memberEmail.trim()) {
+      setMemberMessage("Please enter an email address.");
+      return;
+    }
+
+    setAddingMember(true);
+    setMemberMessage("");
+
+    try {
+      const result = await addProjectMember(token, projectId, {
+        email: memberEmail.trim(),
+      });
+
+      setMemberEmail("");
+      setMemberMessage(`Added ${result.email} to this project.`);
+    } catch (err: any) {
+      setMemberMessage(err?.message || "Failed to add member.");
+    } finally {
+      setAddingMember(false);
+    }
+  };
 
   return (
     <div className="relative min-h-screen bg-[#0f172a] flex items-center justify-center px-4">
@@ -370,8 +370,6 @@ export default function ProjectPage() {
           </div>
         </div>
 
-        {/* Add member section (commented out for frontend reference) */}
-        {/*
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-xs">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -405,7 +403,6 @@ export default function ProjectPage() {
             <p className="mt-2 text-[11px] text-slate-300">{memberMessage}</p>
           )}
         </div>
-        */}
 
         {/* Files table only – no README, no New File */}
         <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60 text-xs">
