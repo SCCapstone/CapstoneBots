@@ -118,6 +118,13 @@ export default function ProjectsPage() {
               + New Project
             </button>
 
+            <Link
+              href="/settings"
+              className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:border-sky-500 hover:text-sky-200 transition"
+            >
+              Settings
+            </Link>
+
             <button
               onClick={() => {
                 logout();

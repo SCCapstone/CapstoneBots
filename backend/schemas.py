@@ -30,6 +30,9 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     email: Optional[EmailStr] = None
 
+class DeleteAccountRequest(BaseModel):
+    password: str
+
 # ============== Project Schemas ==============
 class ProjectBase(BaseModel):
     name: str

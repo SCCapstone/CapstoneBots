@@ -13,9 +13,10 @@ Endpoints:
 from fastapi import APIRouter, HTTPException, status, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import func
 
 from database import get_db
-from models import User
+from models import User, Project, ProjectMember, ObjectLock, Commit, Branch
 import schemas
 from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user
 
@@ -167,3 +168,112 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
         }
     """
     return current_user
+
+
+@router.delete("/account", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_account(
+    body: schemas.DeleteAccountRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Permanently delete the authenticated user's account and handle associated data.
+
+    Requires password confirmation. This action is irreversible.
+
+    Behavior:
+    - Owned projects with NO other members → deleted (cascade removes all related data)
+    - Owned projects WITH other members → ownership transferred to next member
+    - Non-owned project memberships → removed
+    - Object locks held by user → released
+    - Commits in non-owned projects → author_id set to NULL (anonymized)
+    - User record → deleted
+    """
+    # 1. Verify password
+    if not verify_password(body.password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect password",
+        )
+
+    user_id = current_user.user_id
+
+    # 2. Handle owned projects
+    owned_result = await db.execute(
+        select(Project).where(Project.owner_id == user_id)
+    )
+    owned_projects = owned_result.scalars().all()
+
+    for project in owned_projects:
+        # Count members (excluding the current user)
+        member_count_result = await db.execute(
+            select(func.count(ProjectMember.member_id)).where(
+                ProjectMember.project_id == project.project_id,
+                ProjectMember.user_id != user_id,
+            )
+        )
+        other_member_count = member_count_result.scalar()
+
+        if other_member_count == 0:
+            # Sole member → delete the entire project (cascade handles related data)
+            await db.delete(project)
+        else:
+            # Transfer ownership to the next member
+            next_member_result = await db.execute(
+                select(ProjectMember)
+                .where(
+                    ProjectMember.project_id == project.project_id,
+                    ProjectMember.user_id != user_id,
+                )
+                .order_by(ProjectMember.added_at)
+                .limit(1)
+            )
+            next_member = next_member_result.scalars().first()
+
+            if next_member:
+                # Update project owner
+                project.owner_id = next_member.user_id
+                next_member.role = "owner"
+
+            # Remove the deleting user's membership
+            user_membership_result = await db.execute(
+                select(ProjectMember).where(
+                    ProjectMember.project_id == project.project_id,
+                    ProjectMember.user_id == user_id,
+                )
+            )
+            user_membership = user_membership_result.scalars().first()
+            if user_membership:
+                await db.delete(user_membership)
+
+    # 3. Remove non-owned project memberships
+    non_owned_result = await db.execute(
+        select(ProjectMember).where(ProjectMember.user_id == user_id)
+    )
+    for membership in non_owned_result.scalars().all():
+        await db.delete(membership)
+
+    # 4. Release all object locks held by user
+    locks_result = await db.execute(
+        select(ObjectLock).where(ObjectLock.locked_by == user_id)
+    )
+    for lock in locks_result.scalars().all():
+        await db.delete(lock)
+
+    # 5. Anonymize commits in projects user doesn't own (author_id → NULL)
+    commits_result = await db.execute(
+        select(Commit).where(Commit.author_id == user_id)
+    )
+    for commit in commits_result.scalars().all():
+        commit.author_id = None
+
+    # 6. Anonymize branches created by user in projects user doesn't own
+    branches_result = await db.execute(
+        select(Branch).where(Branch.created_by == user_id)
+    )
+    for branch in branches_result.scalars().all():
+        branch.created_by = None
+
+    # 7. Delete the user record
+    await db.delete(current_user)
+    await db.commit()

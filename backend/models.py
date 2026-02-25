@@ -52,7 +52,7 @@ class Branch(Base):
     head_commit_id = Column(UUID(as_uuid=True), ForeignKey("commits.commit_id"), nullable=True)
     parent_branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
 
     __table_args__ = (UniqueConstraint("project_id", "branch_name", name="unique_project_branch"),)
 
@@ -69,7 +69,7 @@ class Commit(Base):
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), nullable=False)
     branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=False)
     parent_commit_id = Column(UUID(as_uuid=True), ForeignKey("commits.commit_id"), nullable=True)
-    author_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    author_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
     commit_message = Column(Text, nullable=False)
     commit_hash = Column(String, unique=True, nullable=False, index=True)
     committed_at = Column(DateTime, default=datetime.utcnow)
