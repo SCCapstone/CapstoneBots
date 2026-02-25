@@ -335,7 +335,7 @@ export default function ProjectPage() {
             </button>
             <button
               type="button"
-              // onClick={() => setShowConfirm(true)}
+              onClick={() => setShowConfirm(true)}
               className="rounded-lg border border-red-500/70 px-3 py-1 text-[11px] text-red-300 transition hover:bg-red-500/10"
             >
               Delete
