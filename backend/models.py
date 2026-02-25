@@ -159,7 +159,7 @@ class ProjectMember(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     role = Column(String, default="member", nullable=False)  # "owner" or "member"
     added_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    added_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    added_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
 
     # Unique constraint to prevent duplicate memberships
     __table_args__ = (

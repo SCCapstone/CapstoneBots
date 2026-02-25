@@ -260,20 +260,27 @@ async def delete_account(
     for lock in locks_result.scalars().all():
         await db.delete(lock)
 
-    # 5. Anonymize commits in projects user doesn't own (author_id → NULL)
+    # 5. Clear added_by references in project memberships
+    added_by_result = await db.execute(
+        select(ProjectMember).where(ProjectMember.added_by == user_id)
+    )
+    for membership in added_by_result.scalars().all():
+        membership.added_by = None
+
+    # 6. Anonymize commits in projects user doesn't own (author_id → NULL)
     commits_result = await db.execute(
         select(Commit).where(Commit.author_id == user_id)
     )
     for commit in commits_result.scalars().all():
         commit.author_id = None
 
-    # 6. Anonymize branches created by user in projects user doesn't own
+    # 7. Anonymize branches created by user in projects user doesn't own
     branches_result = await db.execute(
         select(Branch).where(Branch.created_by == user_id)
     )
     for branch in branches_result.scalars().all():
         branch.created_by = None
 
-    # 7. Delete the user record
+    # 8. Delete the user record
     await db.delete(current_user)
     await db.commit()

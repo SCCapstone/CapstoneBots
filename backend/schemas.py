@@ -73,7 +73,7 @@ class BranchResponse(BranchBase):
     project_id: UUID
     head_commit_id: Optional[UUID]
     created_at: datetime
-    created_by: UUID
+    created_by: Optional[UUID]
 
     class Config:
         from_attributes = True
@@ -91,7 +91,7 @@ class CommitResponse(CommitBase):
     project_id: UUID
     branch_id: UUID
     parent_commit_id: Optional[UUID]
-    author_id: UUID
+    author_id: Optional[UUID]
     commit_hash: str
     committed_at: datetime
     merge_commit: bool
