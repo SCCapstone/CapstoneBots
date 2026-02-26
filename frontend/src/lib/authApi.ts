@@ -72,3 +72,35 @@ export async function signupApi(payload: SignupPayload) {
 
   return res.json();
 }
+
+export async function deleteAccount(token: string, password: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/auth/account`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ password }),
+  });
+
+  if (res.status === 204) {
+    return;
+  }
+
+  if (!res.ok) {
+    let message = "Account deletion failed";
+    try {
+      const data = await res.json();
+      if (data?.detail) {
+        message = typeof data.detail === "string"
+          ? data.detail
+          : Array.isArray(data.detail)
+            ? data.detail.map((d: any) => d.msg || d.detail).join(", ")
+            : message;
+      }
+    } catch {
+      /* no JSON body */
+    }
+    throw new Error(message);
+  }
+}

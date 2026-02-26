@@ -15,15 +15,19 @@ The API mimics Git workflows adapted for 3D asset collaboration.
 from typing import List
 from uuid import UUID
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.orm import joinedload
 
 from database import get_db
-from models import Project, Branch, Commit, BlenderObject, ObjectLock, MergeConflict, User, ProjectMember
+from models import (
+    Project, Branch, Commit, BlenderObject, ObjectLock, MergeConflict,
+    User, ProjectMember, ProjectInvitation,
+    MemberRole, InvitationStatus, INVITE_EXPIRY_DAYS, role_at_least,
+)
 from schemas import (
     ProjectCreate, ProjectResponse, ProjectUpdate, ProjectBase,
     BranchCreate, BranchResponse,
@@ -32,6 +36,7 @@ from schemas import (
     ObjectLockCreate, ObjectLockResponse,
     MergeConflictResponse,
     ProjectMemberAdd, ProjectMemberResponse, ProjectMemberRemove, ProjectWithMembersResponse,
+    InvitationCreate, InvitationResponse, MemberRoleUpdate,
 )
 from utils.auth import get_current_user
 from utils.permissions import check_project_access, is_project_member, get_user_projects
@@ -261,9 +266,72 @@ async def delete_project(
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
-    # Delete the project (cascade will remove all related records)
-    await db.delete(project)
+
+    # Delete S3 objects linked to this project's blender_objects
+    from sqlalchemy import text as sa_text
+    pid = str(project_id)
+    try:
+        # Gather all S3 paths from blender_objects via commits
+        s3_rows = await db.execute(sa_text(
+            "SELECT bo.json_data_path, bo.mesh_data_path FROM blender_objects bo "
+            "JOIN commits c ON bo.commit_id = c.commit_id "
+            "WHERE c.project_id = :pid"
+        ), {"pid": pid})
+        s3_paths = []
+        for row in s3_rows:
+            for path in (row[0], row[1]):
+                if path and isinstance(path, str) and path.startswith("s3://"):
+                    s3_paths.append(path)
+
+        if s3_paths:
+            import os, boto3
+            s3_client = boto3.client(
+                "s3",
+                region_name=os.environ.get("S3_REGION", "us-east-1"),
+                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("S3_ACCESS_KEY"),
+                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get("S3_SECRET_KEY"),
+            )
+            # Group by bucket and batch delete (max 1000 per request)
+            from collections import defaultdict
+            bucket_keys: dict[str, list[str]] = defaultdict(list)
+            for s3_uri in s3_paths:
+                parts = s3_uri[5:]  # strip "s3://"
+                slash = parts.find("/")
+                if slash > 0:
+                    bucket_keys[parts[:slash]].append(parts[slash + 1:])
+            for bucket, keys in bucket_keys.items():
+                for i in range(0, len(keys), 1000):
+                    batch = keys[i:i + 1000]
+                    s3_client.delete_objects(
+                        Bucket=bucket,
+                        Delete={"Objects": [{"Key": k} for k in batch], "Quiet": True},
+                    )
+            import logging
+            logging.getLogger(__name__).info(f"Deleted {len(s3_paths)} S3 objects for project {project_id}")
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"S3 cleanup failed for project {project_id}: {e}")
+
+    # Use raw SQL to avoid ORM circular dependency between Branch ↔ Commit
+    await db.execute(sa_text("UPDATE branches SET head_commit_id = NULL WHERE project_id = :pid"), {"pid": pid})
+    await db.execute(sa_text("UPDATE commits SET parent_commit_id = NULL WHERE project_id = :pid"), {"pid": pid})
+    await db.execute(sa_text(
+        "UPDATE blender_objects SET parent_object_id = NULL "
+        "WHERE commit_id IN (SELECT commit_id FROM commits WHERE project_id = :pid)"
+    ), {"pid": pid})
+    await db.execute(sa_text(
+        "DELETE FROM blender_objects "
+        "WHERE commit_id IN (SELECT commit_id FROM commits WHERE project_id = :pid)"
+    ), {"pid": pid})
+
+    for tbl in [
+        "object_locks", "merge_conflicts",
+        "commits", "branches", "project_metadata",
+        "project_invitations", "project_members",
+    ]:
+        await db.execute(sa_text(f"DELETE FROM {tbl} WHERE project_id = :pid"), {"pid": pid})
+
+    await db.execute(sa_text("DELETE FROM projects WHERE project_id = :pid"), {"pid": pid})
     await db.commit()
 
 # ============== Branch Routes ==============
@@ -809,6 +877,166 @@ async def resolve_conflict(
 
 # ============== Project Collaboration Routes ==============
 
+# ---------- helper ----------
+def _build_invitation_response(inv: ProjectInvitation, project: Project, inviter: User, invitee: User = None) -> InvitationResponse:
+    return InvitationResponse(
+        invitation_id=inv.invitation_id,
+        project_id=inv.project_id,
+        project_name=project.name,
+        inviter_id=inv.inviter_id,
+        inviter_username=inviter.username,
+        invitee_id=inv.invitee_id,
+        invitee_email=inv.invitee_email,
+        invitee_username=invitee.username if invitee else None,
+        role=inv.role,
+        status=inv.status,
+        created_at=inv.created_at,
+        expires_at=inv.expires_at,
+        responded_at=inv.responded_at,
+    )
+
+
+@router.post("/{project_id}/invitations", response_model=InvitationResponse, status_code=status.HTTP_201_CREATED)
+async def send_invitation(
+    project_id: UUID,
+    data: InvitationCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Send a project invitation to a user by email or username.
+    
+    Only owners and editors can send invitations.
+    Invitations expire after INVITE_EXPIRY_DAYS (default 7).
+    """
+    # Validate role value
+    if data.role not in [r.value for r in MemberRole]:
+        raise HTTPException(status_code=400, detail=f"Invalid role: {data.role}. Must be viewer, editor, or owner.")
+
+    # Check caller has at least editor access
+    project, caller_role = await check_project_access(
+        project_id, current_user.user_id, db, require_role=MemberRole.editor
+    )
+
+    # Only owners can invite with "owner" role
+    if data.role == MemberRole.owner.value and caller_role != MemberRole.owner.value:
+        raise HTTPException(status_code=403, detail="Only project owners can assign the owner role.")
+
+    # Resolve the invitee
+    if not data.email and not data.username:
+        raise HTTPException(status_code=400, detail="Provide either email or username.")
+
+    if data.email:
+        result = await db.execute(select(User).where(User.email == data.email))
+    else:
+        result = await db.execute(select(User).where(User.username == data.username))
+    invitee = result.scalars().first()
+
+    if not invitee:
+        raise HTTPException(status_code=404, detail="No user found with that email or username.")
+
+    invitee_email = invitee.email
+
+    # Can't invite yourself
+    if invitee.user_id == current_user.user_id:
+        raise HTTPException(status_code=400, detail="You cannot invite yourself.")
+
+    # Check if already a member
+    existing = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == invitee.user_id,
+        )
+    )
+    if existing.scalars().first():
+        raise HTTPException(status_code=409, detail="User is already a member of this project.")
+
+    # Check for existing pending invitation
+    existing_inv = await db.execute(
+        select(ProjectInvitation).where(
+            ProjectInvitation.project_id == project_id,
+            ProjectInvitation.invitee_email == invitee_email,
+            ProjectInvitation.status == InvitationStatus.pending.value,
+        )
+    )
+    if existing_inv.scalars().first():
+        raise HTTPException(status_code=409, detail="A pending invitation already exists for this user.")
+
+    # Create invitation
+    invitation = ProjectInvitation(
+        project_id=project_id,
+        inviter_id=current_user.user_id,
+        invitee_id=invitee.user_id,
+        invitee_email=invitee_email,
+        role=data.role,
+        status=InvitationStatus.pending.value,
+        expires_at=datetime.utcnow() + timedelta(days=INVITE_EXPIRY_DAYS),
+    )
+    db.add(invitation)
+    await db.commit()
+    await db.refresh(invitation)
+
+    return _build_invitation_response(invitation, project, current_user, invitee)
+
+
+@router.get("/{project_id}/invitations", response_model=List[InvitationResponse])
+async def get_project_invitations(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get all invitations for a project (owners and editors)."""
+    project, _ = await check_project_access(
+        project_id, current_user.user_id, db, require_role=MemberRole.editor
+    )
+
+    result = await db.execute(
+        select(ProjectInvitation, User)
+        .outerjoin(User, ProjectInvitation.invitee_id == User.user_id)
+        .where(ProjectInvitation.project_id == project_id)
+        .order_by(ProjectInvitation.created_at.desc())
+    )
+    rows = result.all()
+
+    # We need inviter info too
+    inviter_ids = {inv.inviter_id for inv, _ in rows}
+    inviter_result = await db.execute(select(User).where(User.user_id.in_(inviter_ids)))
+    inviters = {u.user_id: u for u in inviter_result.scalars().all()}
+
+    response = []
+    for inv, invitee in rows:
+        inviter = inviters.get(inv.inviter_id)
+        response.append(_build_invitation_response(inv, project, inviter, invitee))
+    return response
+
+
+@router.delete("/{project_id}/invitations/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_invitation(
+    project_id: UUID,
+    invitation_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Cancel a pending invitation. Only the inviter or project owner can cancel."""
+    project, caller_role = await check_project_access(
+        project_id, current_user.user_id, db, require_role=MemberRole.editor
+    )
+
+    invitation = await db.get(ProjectInvitation, invitation_id)
+    if not invitation or invitation.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Invitation not found.")
+
+    if invitation.status != InvitationStatus.pending.value:
+        raise HTTPException(status_code=400, detail="Only pending invitations can be cancelled.")
+
+    # Only inviter or owner can cancel
+    if invitation.inviter_id != current_user.user_id and caller_role != MemberRole.owner.value:
+        raise HTTPException(status_code=403, detail="Only the inviter or project owner can cancel this invitation.")
+
+    await db.delete(invitation)
+    await db.commit()
+
+
 @router.post("/{project_id}/members", response_model=ProjectMemberResponse, status_code=status.HTTP_201_CREATED)
 async def add_project_member(
     project_id: UUID,
@@ -817,130 +1045,89 @@ async def add_project_member(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Add a user to a project by email address (immediate access, no invitation).
+    Add a user to a project by email or username (creates an invitation).
     
-    This endpoint allows project owners and existing members to add other users
-    to collaborate on a project. The user is granted immediate access without
-    requiring invitation acceptance.
-    
-    **FRONTEND INTEGRATION POINT:**
-    When user clicks "Add Member" or "Invite Collaborator" button:
-    
-    ```javascript
-    // Example frontend code
-    const response = await fetch(`/api/projects/${projectId}/members`, {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            email: 'teammate@example.com'
-        })
-    });
-    ```
-    
-    **Blender Add-on Integration:**
-    When users log into the Blender add-on, the GET /api/projects endpoint
-    will automatically return all projects they've been added to.
-    
-    Args:
-        project_id: UUID of the project to add member to
-        member_data: Contains the email address of user to add
-        db: Database session dependency
-        current_user: Authenticated user (must be owner or existing member)
-        
-    Returns:
-        ProjectMemberResponse: Details of the newly added member
-        
-    Raises:
-        HTTPException 403: If current user doesn't have permission to add members
-        HTTPException 404: If project or user (by email) doesn't exist
-        HTTPException 409: If user is already a member of the project
-        
-    Example Request:
-        POST /api/projects/123e4567-e89b-12d3-a456-426614174000/members
-        Headers: Authorization: Bearer <token>
-        {
-            "email": "colleague@example.com"
-        }
-        
-    Example Response:
-        {
-            "member_id": "uuid",
-            "project_id": "123e4567-e89b-12d3-a456-426614174000",
-            "user_id": "user-uuid",
-            "username": "colleague_username",
-            "email": "colleague@example.com",
-            "role": "member",
-            "added_at": "2025-12-05T10:30:00",
-            "added_by": "current-user-uuid"
-        }
+    This endpoint maintains backward compatibility: it sends an invitation
+    that the invitee must accept. For immediate access, use the invitation
+    accept endpoint.
     """
-    # Step 1: Check if current user has access to this project
-    # Only owners and existing members can add new members
-    project, user_role = await check_project_access(
-        project_id, 
-        current_user.user_id, 
-        db, 
-        require_owner=False  # Members can also add other members
+    # Validate role
+    role = member_data.role or MemberRole.editor.value
+    if role not in [r.value for r in MemberRole]:
+        raise HTTPException(status_code=400, detail=f"Invalid role: {role}")
+
+    project, caller_role = await check_project_access(
+        project_id, current_user.user_id, db, require_role=MemberRole.editor
     )
-    
-    # Step 2: Find the user to add by email
-    query = select(User).where(User.email == member_data.email)
-    result = await db.execute(query)
+
+    # Only project owners may assign the owner role when inviting members
+    if role == MemberRole.owner.value and caller_role != MemberRole.owner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only project owners can assign the owner role.",
+        )
+    # Resolve user
+    if not member_data.email and not member_data.username:
+        raise HTTPException(status_code=400, detail="Provide either email or username.")
+
+    if member_data.email:
+        result = await db.execute(select(User).where(User.email == member_data.email))
+    else:
+        result = await db.execute(select(User).where(User.username == member_data.username))
     user_to_add = result.scalars().first()
-    
+
     if not user_to_add:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No user found with email: {member_data.email}"
+        raise HTTPException(status_code=404, detail="No user found with that email or username.")
+
+    # Prevent self-invitation
+    if user_to_add.user_id == current_user.user_id:
+        raise HTTPException(status_code=400, detail="You cannot invite yourself to a project.")
+    # Check already member
+    existing = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_to_add.user_id,
         )
-    
-    # Step 3: Check if user is already a member
-    if user_to_add.user_id == project.owner_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User is already the project owner"
-        )
-    
-    existing_member_query = select(ProjectMember).where(
-        ProjectMember.project_id == project_id,
-        ProjectMember.user_id == user_to_add.user_id
     )
-    existing_result = await db.execute(existing_member_query)
-    existing_member = existing_result.scalars().first()
-    
-    if existing_member:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User is already a member of this project"
+    if existing.scalars().first():
+        raise HTTPException(status_code=409, detail="User is already a member of this project.")
+
+    # Check for pending invite
+    existing_inv = await db.execute(
+        select(ProjectInvitation).where(
+            ProjectInvitation.project_id == project_id,
+            ProjectInvitation.invitee_email == user_to_add.email,
+            ProjectInvitation.status == InvitationStatus.pending.value,
         )
-    
-    # Step 4: Add the user as a member
-    new_member = ProjectMember(
+    )
+    if existing_inv.scalars().first():
+        raise HTTPException(status_code=409, detail="A pending invitation already exists for this user.")
+
+    # Create invitation
+    invitation = ProjectInvitation(
         project_id=project_id,
-        user_id=user_to_add.user_id,
-        role="member",
-        added_by=current_user.user_id
+        inviter_id=current_user.user_id,
+        invitee_id=user_to_add.user_id,
+        invitee_email=user_to_add.email,
+        role=role,
+        status=InvitationStatus.pending.value,
+        expires_at=datetime.utcnow() + timedelta(days=INVITE_EXPIRY_DAYS),
     )
-    db.add(new_member)
+    db.add(invitation)
     await db.commit()
-    await db.refresh(new_member)
-    
-    # Step 5: Build response with user information
-    response = ProjectMemberResponse(
-        member_id=new_member.member_id,
-        project_id=new_member.project_id,
-        user_id=new_member.user_id,
+    await db.refresh(invitation)
+
+    # Return a ProjectMemberResponse-shaped object so frontend compatibility is kept
+    return ProjectMemberResponse(
+        member_id=invitation.invitation_id,  # use invitation_id as member_id for compat
+        project_id=invitation.project_id,
+        user_id=user_to_add.user_id,
         username=user_to_add.username,
         email=user_to_add.email,
-        role=new_member.role,
-        added_at=new_member.added_at,
-        added_by=new_member.added_by
+        role=invitation.role,
+        added_at=invitation.created_at,
+        added_by=current_user.user_id,
     )
-    
-    return response
 
 
 @router.get("/{project_id}/members", response_model=List[ProjectMemberResponse])
@@ -949,62 +1136,18 @@ async def get_project_members(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Get all members of a project.
-    
-    Returns a list of all users who have access to the project, including
-    the owner and all added members.
-    
-    **FRONTEND INTEGRATION POINT:**
-    Use this to display the "Members" or "Collaborators" list in your project settings.
-    
-    Args:
-        project_id: UUID of the project
-        db: Database session dependency
-        current_user: Authenticated user (must have access to project)
-        
-    Returns:
-        List[ProjectMemberResponse]: List of all project members with details
-        
-    Raises:
-        HTTPException 403: If current user doesn't have access to project
-        HTTPException 404: If project doesn't exist
-        
-    Example Response:
-        [
-            {
-                "member_id": "uuid1",
-                "user_id": "owner-uuid",
-                "username": "project_owner",
-                "email": "owner@example.com",
-                "role": "owner",
-                "added_at": "2025-12-01T10:00:00"
-            },
-            {
-                "member_id": "uuid2",
-                "user_id": "member-uuid",
-                "username": "team_member",
-                "email": "member@example.com",
-                "role": "member",
-                "added_at": "2025-12-05T14:30:00",
-                "added_by": "owner-uuid"
-            }
-        ]
-    """
-    # Check if user has access to this project
+    """Get all members of a project."""
     project, _ = await check_project_access(project_id, current_user.user_id, db)
-    
-    # Get all members including owner
+
     query = (
         select(ProjectMember, User)
         .join(User, ProjectMember.user_id == User.user_id)
         .where(ProjectMember.project_id == project_id)
-        .order_by(ProjectMember.added_at.asc())  # Owner first (added earliest)
+        .order_by(ProjectMember.added_at.asc())
     )
     result = await db.execute(query)
     members_with_users = result.all()
-    
-    # Build response list
+
     response = []
     for member, user in members_with_users:
         response.append(ProjectMemberResponse(
@@ -1015,10 +1158,52 @@ async def get_project_members(
             email=user.email,
             role=member.role,
             added_at=member.added_at,
-            added_by=member.added_by
+            added_by=member.added_by,
         ))
-    
+
     return response
+
+
+@router.put("/{project_id}/members/{member_id}/role", response_model=ProjectMemberResponse)
+async def update_member_role(
+    project_id: UUID,
+    member_id: UUID,
+    data: MemberRoleUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Change a member's role. Only the project owner can change roles."""
+    if data.role not in [r.value for r in MemberRole]:
+        raise HTTPException(status_code=400, detail=f"Invalid role: {data.role}")
+
+    project, _ = await check_project_access(
+        project_id, current_user.user_id, db, require_owner=True
+    )
+
+    member = await db.get(ProjectMember, member_id)
+    if not member or member.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Member not found in this project.")
+
+    # Can't change own role
+    if member.user_id == current_user.user_id:
+        raise HTTPException(status_code=400, detail="Cannot change your own role.")
+
+    member.role = data.role
+    await db.commit()
+    await db.refresh(member)
+
+    # Fetch user info for response
+    user = await db.get(User, member.user_id)
+    return ProjectMemberResponse(
+        member_id=member.member_id,
+        project_id=member.project_id,
+        user_id=member.user_id,
+        username=user.username,
+        email=user.email,
+        role=member.role,
+        added_at=member.added_at,
+        added_by=member.added_by,
+    )
 
 
 @router.delete("/{project_id}/members/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1028,65 +1213,22 @@ async def remove_project_member(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Remove a member from a project.
-    
-    Only the project owner can remove members. Members cannot remove themselves
-    or other members. The owner cannot be removed.
-    
-    **FRONTEND INTEGRATION POINT:**
-    Add a "Remove" button next to each member in the members list.
-    
-    ```javascript
-    await fetch(`/api/projects/${projectId}/members/${memberId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
-    });
-    ```
-    
-    Args:
-        project_id: UUID of the project
-        member_id: UUID of the ProjectMember record to remove
-        db: Database session dependency
-        current_user: Authenticated user (must be project owner)
-        
-    Returns:
-        204 No Content on successful removal
-        
-    Raises:
-        HTTPException 403: If current user is not the project owner
-        HTTPException 404: If member doesn't exist
-        HTTPException 409: If trying to remove the owner
-        
-    Example:
-        DELETE /api/projects/123e4567-e89b-12d3-a456-426614174000/members/member-uuid
-    """
-    # Check if current user is the project owner (only owners can remove members)
-    project, user_role = await check_project_access(
-        project_id,
-        current_user.user_id,
-        db,
-        require_owner=True  # Only owners can remove members
+    """Remove a member from a project. Only the project owner can remove members."""
+    project, _ = await check_project_access(
+        project_id, current_user.user_id, db, require_owner=True
     )
-    
-    # Fetch the member to remove
+
     member = await db.get(ProjectMember, member_id)
     if not member or member.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Member not found in this project.")
+
+    if member.role == MemberRole.owner.value:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Member not found in this project"
-        )
-    
-    # Prevent removing the owner
-    if member.role == "owner":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=409,
             detail="Cannot remove the project owner. Transfer ownership first or delete the project."
         )
-    
-    # Remove the member
+
     await db.delete(member)
     await db.commit()
-    
-    return None  # 204 No Content
+    return None
 

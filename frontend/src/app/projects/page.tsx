@@ -9,6 +9,7 @@ import {
   Project,
   createProject,
   ProjectCreatePayload,
+  fetchPendingInvitations,
 } from "@/lib/projectsApi";
 
 export default function ProjectsPage() {
@@ -25,6 +26,7 @@ export default function ProjectsPage() {
   const [newDescription, setNewDescription] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [inviteCount, setInviteCount] = useState(0);
 
   // If not authenticated, send to /login
   useEffect(() => {
@@ -46,6 +48,10 @@ export default function ProjectsPage() {
       } finally {
         setLoading(false);
       }
+      try {
+        const invites = await fetchPendingInvitations(token);
+        setInviteCount(invites.length);
+      } catch { }
     })();
 
   }, [token, isAuthenticated, router]);
@@ -117,6 +123,25 @@ export default function ProjectsPage() {
             >
               + New Project
             </button>
+
+            <Link
+              href="/invitations"
+              className="relative rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:border-sky-500 hover:text-sky-200 transition"
+            >
+              Invitations
+              {inviteCount > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-sky-500 text-[9px] font-bold text-white">
+                  {inviteCount}
+                </span>
+              )}
+            </Link>
+
+            <Link
+              href="/settings"
+              className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:border-sky-500 hover:text-sky-200 transition"
+            >
+              Settings
+            </Link>
 
             <button
               onClick={() => {
