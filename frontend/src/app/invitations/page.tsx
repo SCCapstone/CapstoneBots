@@ -71,13 +71,14 @@ export default function InvitationsPage() {
         return isNaN(date.getTime()) ? d : date.toLocaleDateString();
     };
 
+    const ROLE_COLORS: Record<string, string> = {
+        owner: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+        editor: "bg-sky-500/20 text-sky-300 border-sky-500/30",
+        viewer: "bg-slate-500/20 text-slate-300 border-slate-500/30",
+    };
+
     const roleBadge = (role: string) => {
-        const colors: Record<string, string> = {
-            owner: "bg-amber-500/20 text-amber-300 border-amber-500/30",
-            editor: "bg-sky-500/20 text-sky-300 border-sky-500/30",
-            viewer: "bg-slate-500/20 text-slate-300 border-slate-500/30",
-        };
-        return colors[role] || colors.viewer;
+        return ROLE_COLORS[role] || ROLE_COLORS.viewer;
     };
 
     if (!token && !isAuthenticated) {
