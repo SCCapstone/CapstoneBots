@@ -36,7 +36,8 @@ services:
       S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_SECURE: "false"
+      # Use secure (HTTPS) connections for S3 in production. Override in a local-only compose/env file if using HTTP MinIO.
+      S3_SECURE: "true"
       S3_BUCKET: blender-vcs-prod
     ports:
       - "8000:8000"
