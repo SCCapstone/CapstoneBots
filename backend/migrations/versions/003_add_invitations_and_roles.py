@@ -23,7 +23,7 @@ def upgrade():
     # 1. Create project_invitations table
     op.create_table(
         'project_invitations',
-        sa.Column('invitation_id', postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column('invitation_id', postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
         sa.Column('project_id', postgresql.UUID(as_uuid=True),
                   sa.ForeignKey('projects.project_id', ondelete='CASCADE'), nullable=False),
         sa.Column('inviter_id', postgresql.UUID(as_uuid=True),
