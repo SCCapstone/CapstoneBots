@@ -44,3 +44,7 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+sync-project.sh
+
+sync-project.sh

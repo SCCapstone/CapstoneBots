@@ -30,9 +30,9 @@ export type ProjectCreatePayload = {
   active?: boolean;
 };
 
-// export type AddProjectMemberPayload = {
-//   email: string;
-// };
+export type AddProjectMemberPayload = {
+  email: string;
+};
 
 export interface BlenderObject {
   object_id: string;
@@ -171,24 +171,23 @@ export async function fetchCommitObjects(
   return res.json();
 }
 
-// export async function addProjectMember(
-//   token: string,
-//   projectId: string,
-//   payload: AddProjectMemberPayload
-// ): Promise<{ member_id: string; email: string; username: string }>
-// {
-//   const res = await fetch(`${API_BASE}/api/projects/${projectId}/members`, {
-//     method: "POST",
-//     headers: {
-//       "Content-Type": "application/json",
-//       Authorization: `Bearer ${token}`,
-//     },
-//     body: JSON.stringify(payload),
-//   });
-//
-//   if (!res.ok) {
-//     await handleProjectError(res, "Add project member");
-//   }
-//
-//   return res.json();
-// }
+export async function addProjectMember(
+  token: string,
+  projectId: string,
+  payload: AddProjectMemberPayload
+): Promise<{ member_id: string; email: string; username: string }> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/members`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    await handleProjectError(res, "Add project member");
+  }
+
+  return res.json();
+}
