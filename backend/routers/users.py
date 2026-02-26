@@ -316,7 +316,7 @@ async def delete_account(
             if next_member:
                 # Update project owner
                 project.owner_id = next_member.user_id
-                next_member.role = "owner"
+                next_member.role = MemberRole.owner.value
 
             # Remove the deleting user's membership
             user_membership_result = await db.execute(
