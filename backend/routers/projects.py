@@ -1049,8 +1049,13 @@ async def add_project_member(
 
     For invitation-based workflows, use POST /{project_id}/invitations instead.
     """
+    # Validate role
+    role = member_data.role or MemberRole.editor.value
+    if role not in [r.value for r in MemberRole]:
+        raise HTTPException(status_code=400, detail=f"Invalid role: {role}")
+
     project, _ = await check_project_access(
-        project_id, current_user.user_id, db, require_owner=False
+        project_id, current_user.user_id, db, require_role=MemberRole.editor
     )
 
     # Resolve user by email or username
@@ -1084,7 +1089,7 @@ async def add_project_member(
     new_member = ProjectMember(
         project_id=project_id,
         user_id=user_to_add.user_id,
-        role=member_data.role or MemberRole.editor.value,
+        role=role,
         added_by=current_user.user_id,
     )
     db.add(new_member)
