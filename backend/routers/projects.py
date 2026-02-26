@@ -1060,6 +1060,12 @@ async def add_project_member(
         project_id, current_user.user_id, db, require_role=MemberRole.editor
     )
 
+    # Only project owners may assign the owner role when inviting members
+    if role == MemberRole.owner.value and caller_role != MemberRole.owner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only project owners can assign the owner role.",
+        )
     # Resolve user
     if not member_data.email and not member_data.username:
         raise HTTPException(status_code=400, detail="Provide either email or username.")
