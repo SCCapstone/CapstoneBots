@@ -1073,6 +1073,9 @@ async def add_project_member(
     if not user_to_add:
         raise HTTPException(status_code=404, detail="No user found with that email or username.")
 
+    # Prevent self-invitation
+    if user_to_add.user_id == current_user.user_id:
+        raise HTTPException(status_code=400, detail="You cannot invite yourself to a project.")
     # Check already member
     existing = await db.execute(
         select(ProjectMember).where(
