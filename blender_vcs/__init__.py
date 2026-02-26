@@ -24,7 +24,9 @@ import subprocess
 import sys
 import tempfile
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 ADDON_VENDOR_DIR = os.path.join(os.path.dirname(__file__), "_vendor")
 if os.path.isdir(ADDON_VENDOR_DIR) and ADDON_VENDOR_DIR not in sys.path:
@@ -120,6 +122,7 @@ class BVCSAddonPreferences(bpy.types.AddonPreferences):
     frontend_signup_url: bpy.props.StringProperty(
         name="Frontend Sign Up URL",
         default="http://localhost:3000/signup",
+        # add proper url before beta release
     )
     auth_token: bpy.props.StringProperty(
         name="JWT Token",
@@ -407,8 +410,9 @@ class BVCS_OT_OpenSignupPage(bpy.types.Operator):
         if not signup_url:
             self.report({'ERROR'}, "Frontend Sign Up URL is not configured")
             return {'CANCELLED'}
-        if not (signup_url.startswith("http://") or signup_url.startswith("https://")):
-            self.report({'ERROR'}, "Sign Up URL must start with http:// or https://")
+        parsed = urlparse(signup_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            self.report({'ERROR'}, "Sign Up URL must be a valid http:// or https:// URL")
             return {'CANCELLED'}
 
         try:
@@ -469,7 +473,7 @@ class BVCS_OT_SelectProject(bpy.types.Operator):
     project_enum: bpy.props.EnumProperty(
         name="Project",
         description="Choose a project",
-        items=lambda self, context: get_user_projects_enum_items(context)
+        items=lambda self, context: get_user_projects_for_enum(context)
     )
 
     def execute(self, context):
@@ -527,7 +531,7 @@ def get_user_projects(context):
         return []
 
 
-def get_user_projects_enum_items(context):
+def get_user_projects_for_enum(context):
     projects = get_user_projects(context)
     if projects:
         return projects
@@ -549,12 +553,52 @@ def get_auth_headers(prefs):
 
 
 def _enum_conflict_items(self, context):
-    return getattr(BVCS_OT_CheckConflicts, "_cached_conflict_items", [])
+    items = getattr(BVCS_OT_CheckConflicts, "_cached_conflict_items", None)
+    if not items:
+        return [("NONE", "No conflicts", "No conflicts available")]
+    return items
 
 
 PROJECT_BLEND_FILE_ITEMS = [("NONE", "No pushed .blend files", "Push a file to this project first")]
 PROJECT_BLEND_FILE_MAP = {}
 PROJECT_BLEND_FILE_PROJECT_ID = ""
+
+# Temp subdirectory names used for downloaded .blend files.
+_BVCS_TEMP_SUBDIRS = ("bvcs_backend_open", "bvcs_conflict_compare")
+
+# Max age (in seconds) before a temp file is considered stale and eligible for cleanup.
+_BVCS_TEMP_MAX_AGE_SECS = 24 * 60 * 60  # 24 hours
+
+import time as _time
+
+def _cleanup_bvcs_temp_dirs(max_age_secs=_BVCS_TEMP_MAX_AGE_SECS, force=False):
+    """Remove stale BVCS temp files.
+
+    By default only files older than *max_age_secs* are deleted so that
+    files currently in use are not disrupted.  When *force* is ``True``
+    every file (and the directory itself) is removed regardless of age.
+    """
+    now = _time.time()
+    for subdir in _BVCS_TEMP_SUBDIRS:
+        dir_path = os.path.join(tempfile.gettempdir(), subdir)
+        if not os.path.isdir(dir_path):
+            continue
+        for fname in os.listdir(dir_path):
+            fpath = os.path.join(dir_path, fname)
+            try:
+                if not os.path.isfile(fpath):
+                    continue
+                if force or (now - os.path.getmtime(fpath)) > max_age_secs:
+                    os.remove(fpath)
+                    logger.debug(f"Cleaned up temp file: {fpath}")
+            except Exception:
+                logger.debug(f"Could not remove temp file: {fpath}")
+        # Remove the directory itself if it is now empty.
+        try:
+            if not os.listdir(dir_path):
+                os.rmdir(dir_path)
+        except Exception:
+            pass
 
 
 def _refresh_project_blend_file_cache(context, prefs):
@@ -583,21 +627,41 @@ def _refresh_project_blend_file_cache(context, prefs):
         if not isinstance(commits, list) or not commits:
             return
 
-        seen_paths = set()
-        found_files = []
+        # Limit to 10 most recent commits to avoid excessive HTTP requests.
+        recent_commits = [c for c in commits[:10] if c.get("commit_id")]
 
-        for commit in commits[:30]:
+        def _fetch_commit_objects(commit):
+            """Fetch objects for a single commit (runs in a thread)."""
             commit_id = commit.get("commit_id")
-            if not commit_id:
-                continue
-
-            objects_resp = requests.get(
+            resp = requests.get(
                 f"{api_base}/api/projects/{project_id}/commits/{commit_id}/objects",
                 headers=headers,
                 timeout=10,
             )
-            objects_resp.raise_for_status()
-            commit_objects = objects_resp.json()
+            resp.raise_for_status()
+            return commit, resp.json()
+
+        # Fetch commit objects concurrently (up to 4 at a time).
+        commit_results = []
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {
+                executor.submit(_fetch_commit_objects, c): c
+                for c in recent_commits
+            }
+            for future in as_completed(futures):
+                try:
+                    commit_results.append(future.result())
+                except Exception:
+                    logger.debug(f"Skipping commit {futures[future].get('commit_id')}: request failed")
+
+        # Sort results to preserve original commit order (most recent first).
+        commit_order = {c.get("commit_id"): i for i, c in enumerate(recent_commits)}
+        commit_results.sort(key=lambda pair: commit_order.get(pair[0].get("commit_id"), 0))
+
+        seen_paths = set()
+        found_files = []
+
+        for commit, commit_objects in commit_results:
             if not isinstance(commit_objects, list):
                 continue
 
@@ -980,22 +1044,43 @@ class BVCS_OT_Push(bpy.types.Operator):
         else:
             remote_commit_hash = (latest_remote or {}).get("commit_hash") or ""
             base_commit_hash = str(pending_commit.get("base_commit_hash") or "")
-            if remote_commit_hash and base_commit_hash != remote_commit_hash:
-                wm["bvcs_push_conflict"] = {
-                    "base_commit_hash": base_commit_hash,
-                    "remote_commit_hash": remote_commit_hash,
-                    "remote_commit_id": (latest_remote or {}).get("commit_id"),
-                    "remote_commit_message": (latest_remote or {}).get("commit_message"),
-                    "remote_s3_path": (latest_remote or {}).get("s3_path"),
-                    "remote_object_name": (latest_remote or {}).get("object_name"),
-                    "local_file_path": pending_commit.get("file_path") or local_file_path,
-                    "detected_at": datetime.now(timezone.utc).isoformat(),
-                }
-                self.report(
-                    {'ERROR'},
-                    "Push blocked: remote changed since your last pull. Pull latest, merge, then recommit before pushing."
-                )
-                return {'CANCELLED'}
+            if remote_commit_hash:
+                # If there is a remote history but this local commit has no base,
+                # the user likely hasn't pulled yet. Block the push and instruct them
+                # to pull before creating their first commit.
+                if not base_commit_hash:
+                    wm["bvcs_push_conflict"] = {
+                        "base_commit_hash": base_commit_hash,
+                        "remote_commit_hash": remote_commit_hash,
+                        "remote_commit_id": (latest_remote or {}).get("commit_id"),
+                        "remote_commit_message": (latest_remote or {}).get("commit_message"),
+                        "remote_s3_path": (latest_remote or {}).get("s3_path"),
+                        "remote_object_name": (latest_remote or {}).get("object_name"),
+                        "local_file_path": pending_commit.get("file_path") or local_file_path,
+                        "detected_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    self.report(
+                        {'ERROR'},
+                        "Push blocked: remote history exists but your commit has no base. Pull the latest version before creating your first commit."
+                    )
+                    return {'CANCELLED'}
+                # Normal conflict: local base differs from current remote head.
+                if base_commit_hash != remote_commit_hash:
+                    wm["bvcs_push_conflict"] = {
+                        "base_commit_hash": base_commit_hash,
+                        "remote_commit_hash": remote_commit_hash,
+                        "remote_commit_id": (latest_remote or {}).get("commit_id"),
+                        "remote_commit_message": (latest_remote or {}).get("commit_message"),
+                        "remote_s3_path": (latest_remote or {}).get("s3_path"),
+                        "remote_object_name": (latest_remote or {}).get("object_name"),
+                        "local_file_path": pending_commit.get("file_path") or local_file_path,
+                        "detected_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    self.report(
+                        {'ERROR'},
+                        "Push blocked: remote changed since your last pull. Pull latest, merge, then recommit before pushing."
+                    )
+                    return {'CANCELLED'}
             
         s3_info, err = make_s3_client(prefs)
         if err:
@@ -1216,9 +1301,17 @@ class BVCS_OT_ResolveMergeConflict(bpy.types.Operator):
 
             # Open remote version in a separate Blender instance for side-by-side comparison.
             blender_bin = bpy.app.binary_path
-            if blender_bin:
-                subprocess.Popen([blender_bin, remote_local_path])
+            if not blender_bin or not os.path.isfile(blender_bin):
+                logger.error(f"Blender binary path is invalid or not found: {blender_bin!r}")
+                self.report({'ERROR'}, "Cannot open remote file: Blender binary not found.")
+                return {'CANCELLED'}
 
+            if not remote_local_path or not os.path.isfile(remote_local_path):
+                logger.error(f"Remote conflict file path is invalid or not found: {remote_local_path!r}")
+                self.report({'ERROR'}, "Cannot open remote file: downloaded file not found.")
+                return {'CANCELLED'}
+
+            subprocess.Popen([blender_bin, remote_local_path])
             return context.window_manager.invoke_props_dialog(self, width=700)
         except Exception as e:
             logger.error(f"Failed to prepare merge conflict resolution: {e}")
@@ -1261,7 +1354,10 @@ class BVCS_OT_ResolveMergeConflict(bpy.types.Operator):
             del wm["bvcs_push_conflict_compare"]
         if "bvcs_push_conflict" in wm:
             del wm["bvcs_push_conflict"]
-        self.report({'INFO'}, "Conflict resolved: your version is marked ready to push to main.")
+        self.report(
+            {'WARNING'},
+            "Conflict resolved: your local version will be pushed. Any remote changes not manually merged into your file will be overwritten."
+        )
         return {'FINISHED'}
 
     def draw(self, context):
@@ -1271,6 +1367,10 @@ class BVCS_OT_ResolveMergeConflict(bpy.types.Operator):
         layout.label(text="Remote and local files are opened/prepared for comparison.", icon='INFO')
         layout.label(text=f"Local: {compare.get('local_path', '')}")
         layout.label(text=f"Remote: {compare.get('remote_path', '')}")
+        layout.separator()
+        layout.label(text="WARNING: 'Push My Version' does NOT auto-merge remote changes.", icon='ERROR')
+        layout.label(text="Manually copy any needed changes from the remote file before pushing.")
+        layout.separator()
         layout.prop(self, "resolution")
 
 class BVCS_OT_CheckConflicts(bpy.types.Operator):
@@ -1640,8 +1740,18 @@ def register():
         description="Select a pushed .blend file",
         items=_enum_project_blend_files,
     )
+    # Remove stale temp .blend files from previous sessions (older than 24 h).
+    try:
+        _cleanup_bvcs_temp_dirs()
+    except Exception:
+        logger.debug("Temp cleanup on register skipped due to error")
 
 def unregister():
+    # Force-remove all BVCS temp files when the addon is disabled.
+    try:
+        _cleanup_bvcs_temp_dirs(force=True)
+    except Exception:
+        logger.debug("Temp cleanup on unregister skipped due to error")
     if hasattr(bpy.types.WindowManager, "bvcs_project_file"):
         del bpy.types.WindowManager.bvcs_project_file
     for cls in reversed(classes):
