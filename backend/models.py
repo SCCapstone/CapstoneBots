@@ -1,10 +1,36 @@
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, LargeBinary, Enum
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Index, LargeBinary, Enum as SAEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 from database import Base
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 import enum
+import os
+
+
+# ============== Role & Status Enums ==============
+
+class MemberRole(str, enum.Enum):
+    """Role hierarchy: owner > editor > viewer"""
+    viewer = "viewer"
+    editor = "editor"
+    owner = "owner"
+
+ROLE_HIERARCHY = {MemberRole.viewer: 0, MemberRole.editor: 1, MemberRole.owner: 2}
+
+def role_at_least(user_role: MemberRole, required: MemberRole) -> bool:
+    """Check if user_role meets the minimum required level."""
+    return ROLE_HIERARCHY.get(user_role, -1) >= ROLE_HIERARCHY.get(required, 99)
+
+
+class InvitationStatus(str, enum.Enum):
+    pending = "pending"
+    accepted = "accepted"
+    declined = "declined"
+    expired = "expired"
+
+
+INVITE_EXPIRY_DAYS = int(os.getenv("INVITE_EXPIRY_DAYS", "7"))
 
 class User(Base):
     __tablename__ = "users"
@@ -20,6 +46,8 @@ class User(Base):
     commits = relationship("Commit", back_populates="author")
     locks = relationship("ObjectLock", back_populates="locked_by_user")
     project_memberships = relationship("ProjectMember", foreign_keys="ProjectMember.user_id", back_populates="user")
+    invitations_sent = relationship("ProjectInvitation", foreign_keys="ProjectInvitation.inviter_id", back_populates="inviter", passive_deletes=True)
+    invitations_received = relationship("ProjectInvitation", foreign_keys="ProjectInvitation.invitee_id", back_populates="invitee", passive_deletes=True)
 
 
 class Project(Base):
@@ -40,6 +68,7 @@ class Project(Base):
     locks = relationship("ObjectLock", back_populates="project", cascade="all, delete-orphan")
     conflicts = relationship("MergeConflict", back_populates="project", cascade="all, delete-orphan")
     project_metadata = relationship("ProjectMetadata", back_populates="project", cascade="all, delete-orphan")
+    invitations = relationship("ProjectInvitation", back_populates="project", cascade="all, delete-orphan")
     members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
 
 
@@ -147,26 +176,56 @@ class ProjectMetadata(Base):
 class ProjectMember(Base):
     """
     Junction table for project collaboration.
-    
+
     Enables many-to-many relationship between users and projects.
-    When a user is added to a project, they get immediate access without requiring acceptance.
-    The Blender add-on will automatically show all projects where user is owner or member.
+    Roles: viewer (read-only), editor (commit/branch), owner (full control).
     """
     __tablename__ = "project_members"
 
     member_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
-    role = Column(String, default="member", nullable=False)  # "owner" or "member"
+    role = Column(String, default=MemberRole.editor.value, nullable=False)  # viewer / editor / owner
     added_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     added_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
 
-    # Unique constraint to prevent duplicate memberships
     __table_args__ = (
         UniqueConstraint("project_id", "user_id", name="unique_project_member"),
+        Index("ix_project_members_project_user", "project_id", "user_id"),
     )
 
     # Relationships
     project = relationship("Project", back_populates="members")
     user = relationship("User", foreign_keys=[user_id], back_populates="project_memberships")
     added_by_user = relationship("User", foreign_keys=[added_by])
+
+
+class ProjectInvitation(Base):
+    """
+    Invitation to join a project.
+
+    Flow: owner/editor sends invite → invitee accepts/declines → on accept, ProjectMember created.
+    Invitations expire after INVITE_EXPIRY_DAYS (default 7).
+    """
+    __tablename__ = "project_invitations"
+
+    invitation_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False)
+    inviter_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    invitee_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=True)  # resolved from email/username
+    invitee_email = Column(String, nullable=False)  # always stored for display
+    role = Column(String, default=MemberRole.editor.value, nullable=False)
+    status = Column(String, default=InvitationStatus.pending.value, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    responded_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_invitation_project_email_status", "project_id", "invitee_email", "status"),
+        Index("ix_invitation_invitee_status", "invitee_id", "status"),
+    )
+
+    # Relationships
+    project = relationship("Project", back_populates="invitations")
+    inviter = relationship("User", foreign_keys=[inviter_id], back_populates="invitations_sent")
+    invitee = relationship("User", foreign_keys=[invitee_id], back_populates="invitations_received")

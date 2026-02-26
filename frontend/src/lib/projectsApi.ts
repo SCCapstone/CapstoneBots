@@ -30,8 +30,45 @@ export type ProjectCreatePayload = {
   active?: boolean;
 };
 
-export type AddProjectMemberPayload = {
+export type MemberRole = "viewer" | "editor" | "owner";
+
+export type ProjectMember = {
+  member_id: string;
+  project_id: string;
+  user_id: string;
+  username: string;
   email: string;
+  role: MemberRole;
+  added_at: string;
+  added_by?: string;
+};
+
+export type Invitation = {
+  invitation_id: string;
+  project_id: string;
+  project_name?: string;
+  inviter_id: string;
+  inviter_username?: string;
+  invitee_id?: string;
+  invitee_email: string;
+  invitee_username?: string;
+  role: MemberRole;
+  status: "pending" | "accepted" | "declined" | "expired";
+  created_at: string;
+  expires_at: string;
+  responded_at?: string;
+};
+
+export type InvitationPayload = {
+  email?: string;
+  username?: string;
+  role?: MemberRole;
+};
+
+export type AddProjectMemberPayload = {
+  email?: string;
+  username?: string;
+  role?: MemberRole;
 };
 
 export interface BlenderObject {
@@ -40,7 +77,7 @@ export interface BlenderObject {
   object_type: string;
   file_path: string;
   commit_id: string;
-};
+}
 
 async function handleProjectError(res: Response, context: string) {
   let message = `${context} failed: ${res.status}`;
@@ -62,11 +99,13 @@ async function handleProjectError(res: Response, context: string) {
   throw new Error(message);
 }
 
+// ============== Project CRUD ==============
+
 export async function fetchProjects(token: string): Promise<Project[]> {
   const res = await fetch(`${API_BASE}/api/projects`, {
     method: "GET",
     headers: {
-      "Authorization": `Bearer ${token}`,
+      Authorization: `Bearer ${token}`,
     },
   });
   if (!res.ok) {
@@ -80,7 +119,7 @@ export async function createProject(token: string, payload: ProjectCreatePayload
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`,
+      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(payload),
   });
@@ -98,32 +137,19 @@ export async function deleteProject(token: string, id: string): Promise<void> {
     },
   });
 
-  // 204 No Content is success
-  if (res.status === 204) {
-    return;
-  }
+  if (res.status === 204) return;
 
-  // Any other non-2xx status → try to pull an error message,
-  // but do NOT call res.json() first (it might be empty).
   if (!res.ok) {
     let message = `Delete project failed: ${res.status}`;
-
     try {
       const text = await res.text();
-      if (text) {
-        message = text;
-      }
-    } catch {
-      // ignore
-    }
-
+      if (text) message = text;
+    } catch { }
     throw new Error(message);
   }
-
-  // For the rare case the backend returns 200 + JSON, we *could* parse it,
-  // but we don't actually need it anywhere, so just ignore.
-  return;
 }
+
+// ============== Commits ==============
 
 export async function fetchCommits(
   token: string,
@@ -131,21 +157,13 @@ export async function fetchCommits(
   branchName = "main"
 ): Promise<Commit[]> {
   const res = await fetch(
-    `${API_BASE}/api/projects/${projectId}/commits?branch_name=${encodeURIComponent(
-      branchName
-    )}`,
+    `${API_BASE}/api/projects/${projectId}/commits?branch_name=${encodeURIComponent(branchName)}`,
     {
       method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { Authorization: `Bearer ${token}` },
     }
   );
-
-  if (!res.ok) {
-    await handleProjectError(res, "Fetch commits");
-  }
-
+  if (!res.ok) await handleProjectError(res, "Fetch commits");
   return res.json();
 }
 
@@ -163,19 +181,17 @@ export async function fetchCommitObjects(
       },
     }
   );
-
-  if (!res.ok) {
-    throw new Error("Failed to fetch commit objects");
-  }
-
+  if (!res.ok) throw new Error("Failed to fetch commit objects");
   return res.json();
 }
+
+// ============== Members ==============
 
 export async function addProjectMember(
   token: string,
   projectId: string,
   payload: AddProjectMemberPayload
-): Promise<{ member_id: string; email: string; username: string }> {
+): Promise<ProjectMember> {
   const res = await fetch(`${API_BASE}/api/projects/${projectId}/members`, {
     method: "POST",
     headers: {
@@ -184,10 +200,116 @@ export async function addProjectMember(
     },
     body: JSON.stringify(payload),
   });
-
-  if (!res.ok) {
-    await handleProjectError(res, "Add project member");
-  }
-
+  if (!res.ok) await handleProjectError(res, "Add project member");
   return res.json();
+}
+
+export async function fetchProjectMembers(
+  token: string,
+  projectId: string
+): Promise<ProjectMember[]> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/members`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) await handleProjectError(res, "Fetch project members");
+  return res.json();
+}
+
+export async function removeProjectMember(
+  token: string,
+  projectId: string,
+  memberId: string
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/members/${memberId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 204) return;
+  if (!res.ok) await handleProjectError(res, "Remove project member");
+}
+
+export async function updateMemberRole(
+  token: string,
+  projectId: string,
+  memberId: string,
+  role: MemberRole
+): Promise<ProjectMember> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/members/${memberId}/role`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) await handleProjectError(res, "Update member role");
+  return res.json();
+}
+
+// ============== Invitations ==============
+
+export async function sendInvitation(
+  token: string,
+  projectId: string,
+  payload: InvitationPayload
+): Promise<Invitation> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/invitations`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) await handleProjectError(res, "Send invitation");
+  return res.json();
+}
+
+export async function fetchProjectInvitations(
+  token: string,
+  projectId: string
+): Promise<Invitation[]> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/invitations`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) await handleProjectError(res, "Fetch project invitations");
+  return res.json();
+}
+
+export async function cancelInvitation(
+  token: string,
+  projectId: string,
+  invitationId: string
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/invitations/${invitationId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 204) return;
+  if (!res.ok) await handleProjectError(res, "Cancel invitation");
+}
+
+export async function fetchPendingInvitations(token: string): Promise<Invitation[]> {
+  const res = await fetch(`${API_BASE}/api/auth/invitations/pending`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) await handleProjectError(res, "Fetch pending invitations");
+  return res.json();
+}
+
+export async function acceptInvitation(token: string, invitationId: string): Promise<ProjectMember> {
+  const res = await fetch(`${API_BASE}/api/auth/invitations/${invitationId}/accept`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) await handleProjectError(res, "Accept invitation");
+  return res.json();
+}
+
+export async function declineInvitation(token: string, invitationId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/auth/invitations/${invitationId}/decline`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) await handleProjectError(res, "Decline invitation");
 }

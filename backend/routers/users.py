@@ -13,10 +13,11 @@ Endpoints:
 from fastapi import APIRouter, HTTPException, status, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func
+from sqlalchemy import func, text as sa_text
+from sqlalchemy.exc import IntegrityError
 
 from database import get_db
-from models import User, Project, ProjectMember, ObjectLock, Commit, Branch
+from models import User, Project, ProjectMember, ProjectInvitation, ObjectLock, Commit, Branch, MemberRole, InvitationStatus
 import schemas
 from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user
 
@@ -215,8 +216,49 @@ async def delete_account(
         other_member_count = member_count_result.scalar()
 
         if other_member_count == 0:
-            # Sole member → delete the entire project (cascade handles related data)
-            await db.delete(project)
+            # Sole member → delete entire project manually to avoid
+            # ORM circular-dependency between Branch ↔ Commit.
+            pid = project.project_id
+
+            # Break circular FKs first
+            await db.execute(sa_text(
+                "UPDATE branches SET head_commit_id = NULL WHERE project_id = :pid"
+            ), {"pid": str(pid)})
+            await db.execute(sa_text(
+                "UPDATE commits SET parent_commit_id = NULL WHERE project_id = :pid"
+            ), {"pid": str(pid)})
+
+            # blender_objects links via commit_id (not project_id) and has self-ref parent_object_id
+            await db.execute(sa_text(
+                "UPDATE blender_objects SET parent_object_id = NULL "
+                "WHERE commit_id IN (SELECT commit_id FROM commits WHERE project_id = :pid)"
+            ), {"pid": str(pid)})
+            await db.execute(sa_text(
+                "DELETE FROM blender_objects "
+                "WHERE commit_id IN (SELECT commit_id FROM commits WHERE project_id = :pid)"
+            ), {"pid": str(pid)})
+
+            # Delete remaining child tables that DO have project_id
+            for tbl in [
+                "object_locks", "merge_conflicts",
+                "commits", "branches", "project_metadata",
+                "project_invitations", "project_members",
+            ]:
+                await db.execute(sa_text(
+                    f"DELETE FROM {tbl} WHERE project_id = :pid"
+                ), {"pid": str(pid)})
+
+            # Delete the project itself
+            await db.execute(sa_text(
+                "DELETE FROM projects WHERE project_id = :pid"
+            ), {"pid": str(pid)})
+
+            # Expunge the ORM object so SQLAlchemy doesn't try to flush it
+            await db.execute(sa_text("SELECT 1"))  # sync the session
+            try:
+                db.expunge(project)
+            except Exception:
+                pass
         else:
             # Transfer ownership to the next member
             next_member_result = await db.execute(
@@ -281,6 +323,189 @@ async def delete_account(
     for branch in branches_result.scalars().all():
         branch.created_by = None
 
-    # 8. Delete the user record
+    # 7b. Delete all invitations sent or received by this user
+    from models import ProjectInvitation
+    from sqlalchemy import or_
+    invitations_result = await db.execute(
+        select(ProjectInvitation).where(
+            or_(
+                ProjectInvitation.inviter_id == user_id,
+                ProjectInvitation.invitee_id == user_id,
+            )
+        )
+    )
+    for invitation in invitations_result.scalars().all():
+        await db.delete(invitation)
+
+    # 8. Flush all cleanup changes first
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Could not delete account due to a database constraint. "
+                "Please ensure the database migration (002) has been applied."
+            ),
+        )
+
+    # 9. Now delete the user record
     await db.delete(current_user)
     await db.commit()
+
+
+# ============== Invitation Routes (User-facing) ==============
+
+@router.get("/invitations/pending", response_model=list[schemas.InvitationResponse])
+async def get_pending_invitations(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all pending invitations for the current user."""
+    from datetime import datetime
+    from sqlalchemy.orm import joinedload
+
+    result = await db.execute(
+        select(ProjectInvitation)
+        .where(
+            ProjectInvitation.invitee_id == current_user.user_id,
+            ProjectInvitation.status == InvitationStatus.pending.value,
+        )
+        .order_by(ProjectInvitation.created_at.desc())
+    )
+    invitations = result.scalars().all()
+
+    # Build responses with project and inviter info
+    response = []
+    for inv in invitations:
+        # Auto-expire
+        if inv.expires_at and inv.expires_at < datetime.utcnow():
+            inv.status = InvitationStatus.expired.value
+            continue
+
+        project = await db.get(Project, inv.project_id)
+        inviter = await db.get(User, inv.inviter_id)
+        invitee = await db.get(User, inv.invitee_id) if inv.invitee_id else None
+
+        response.append(schemas.InvitationResponse(
+            invitation_id=inv.invitation_id,
+            project_id=inv.project_id,
+            project_name=project.name if project else None,
+            inviter_id=inv.inviter_id,
+            inviter_username=inviter.username if inviter else None,
+            invitee_id=inv.invitee_id,
+            invitee_email=inv.invitee_email,
+            invitee_username=invitee.username if invitee else None,
+            role=inv.role,
+            status=inv.status,
+            created_at=inv.created_at,
+            expires_at=inv.expires_at,
+            responded_at=inv.responded_at,
+        ))
+
+    await db.commit()  # persist any auto-expired status changes
+    return response
+
+
+@router.post("/invitations/{invitation_id}/accept", response_model=schemas.ProjectMemberResponse)
+async def accept_invitation(
+    invitation_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Accept a pending invitation and become a project member."""
+    from uuid import UUID as UUIDType
+    from datetime import datetime
+
+    try:
+        inv_uuid = UUIDType(invitation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid invitation ID.")
+
+    invitation = await db.get(ProjectInvitation, inv_uuid)
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Invitation not found.")
+
+    if invitation.invitee_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="This invitation is not for you.")
+
+    if invitation.status != InvitationStatus.pending.value:
+        raise HTTPException(status_code=400, detail=f"Invitation is already {invitation.status}.")
+
+    if invitation.expires_at < datetime.utcnow():
+        invitation.status = InvitationStatus.expired.value
+        await db.commit()
+        raise HTTPException(status_code=400, detail="This invitation has expired.")
+
+    # Check if already a member
+    existing = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == invitation.project_id,
+            ProjectMember.user_id == current_user.user_id,
+        )
+    )
+    if existing.scalars().first():
+        invitation.status = InvitationStatus.accepted.value
+        invitation.responded_at = datetime.utcnow()
+        await db.commit()
+        raise HTTPException(status_code=409, detail="You are already a member of this project.")
+
+    # Create membership
+    new_member = ProjectMember(
+        project_id=invitation.project_id,
+        user_id=current_user.user_id,
+        role=invitation.role,
+        added_by=invitation.inviter_id,
+    )
+    db.add(new_member)
+
+    invitation.status = InvitationStatus.accepted.value
+    invitation.responded_at = datetime.utcnow()
+
+    await db.commit()
+    await db.refresh(new_member)
+
+    return schemas.ProjectMemberResponse(
+        member_id=new_member.member_id,
+        project_id=new_member.project_id,
+        user_id=new_member.user_id,
+        username=current_user.username,
+        email=current_user.email,
+        role=new_member.role,
+        added_at=new_member.added_at,
+        added_by=new_member.added_by,
+    )
+
+
+@router.post("/invitations/{invitation_id}/decline")
+async def decline_invitation(
+    invitation_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Decline a pending invitation."""
+    from uuid import UUID as UUIDType
+    from datetime import datetime
+
+    try:
+        inv_uuid = UUIDType(invitation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid invitation ID.")
+
+    invitation = await db.get(ProjectInvitation, inv_uuid)
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Invitation not found.")
+
+    if invitation.invitee_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="This invitation is not for you.")
+
+    if invitation.status != InvitationStatus.pending.value:
+        raise HTTPException(status_code=400, detail=f"Invitation is already {invitation.status}.")
+
+    invitation.status = InvitationStatus.declined.value
+    invitation.responded_at = datetime.utcnow()
+    await db.commit()
+
+    return {"status": "declined", "invitation_id": str(invitation.invitation_id)}
+

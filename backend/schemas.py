@@ -235,20 +235,16 @@ class VersionHistoryResponse(BaseModel):
 
 
 # ============== Project Collaboration Schemas ==============
+
 class ProjectMemberAdd(BaseModel):
     """
-    Schema for adding a member to a project.
-    
-    FRONTEND INTEGRATION POINT:
-    When user clicks "Add Member" button, send POST request to:
-    /api/projects/{project_id}/members
-    
-    Request body example:
-    {
-        "email": "teammate@example.com"
-    }
+    Schema for sending a project invitation.
+
+    Accepts email or username to identify the user, plus a role.
     """
-    email: EmailStr
+    email: Optional[EmailStr] = None
+    username: Optional[str] = None
+    role: str = "editor"  # viewer / editor / owner
 
 class ProjectMemberResponse(BaseModel):
     """Response containing project member information"""
@@ -267,6 +263,38 @@ class ProjectMemberResponse(BaseModel):
 class ProjectMemberRemove(BaseModel):
     """Schema for removing a member from a project"""
     user_id: UUID
+
+class MemberRoleUpdate(BaseModel):
+    """Schema for changing a member's role"""
+    role: str  # viewer / editor / owner
+
+class InvitationCreate(BaseModel):
+    """
+    Schema for creating a project invitation.
+    Provide either email or username (at least one required).
+    """
+    email: Optional[EmailStr] = None
+    username: Optional[str] = None
+    role: str = "editor"  # viewer / editor / owner
+
+class InvitationResponse(BaseModel):
+    """Response containing invitation details"""
+    invitation_id: UUID
+    project_id: UUID
+    project_name: Optional[str] = None
+    inviter_id: UUID
+    inviter_username: Optional[str] = None
+    invitee_id: Optional[UUID]
+    invitee_email: EmailStr
+    invitee_username: Optional[str] = None
+    role: str
+    status: str
+    created_at: datetime
+    expires_at: datetime
+    responded_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
 
 class ProjectWithMembersResponse(ProjectResponse):
     """Extended project response that includes member list"""

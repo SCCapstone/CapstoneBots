@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
+import sqlalchemy as sa
 from contextlib import asynccontextmanager
 import os
 from dotenv import load_dotenv
@@ -53,6 +54,16 @@ async def init_db():
     """Initialize database connection and create tables."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # Ensure nullable columns for account deletion (idempotent)
+        for stmt in [
+            "ALTER TABLE branches ALTER COLUMN created_by DROP NOT NULL",
+            "ALTER TABLE commits ALTER COLUMN author_id DROP NOT NULL",
+        ]:
+            try:
+                await conn.execute(sa.text(stmt))
+            except Exception:
+                pass  # Column already nullable
 
 async def close_db():
     """Close database connections."""
