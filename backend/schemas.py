@@ -33,6 +33,14 @@ class TokenData(BaseModel):
 class DeleteAccountRequest(BaseModel):
     password: str
 
+# ============== Password Reset Schemas ==============
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
 # ============== Project Schemas ==============
 class ProjectBase(BaseModel):
     name: str

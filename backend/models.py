@@ -41,6 +41,7 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime, nullable=True)
+    password_changed_at = Column(DateTime, nullable=True)
 
     projects = relationship("Project", back_populates="owner")
     commits = relationship("Commit", back_populates="author")

@@ -104,3 +104,37 @@ export async function deleteAccount(token: string, password: string): Promise<vo
     throw new Error(message);
   }
 }
+
+export async function forgotPasswordApi(email: string) {
+  const res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    throw new Error("Request failed");
+  }
+  return res.json();
+}
+
+export async function resetPasswordApi(token: string, new_password: string) {
+  const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, new_password }),
+  });
+  if (!res.ok) {
+    let message = "Password reset failed";
+    try {
+      const data = await res.json();
+      if (data?.detail && typeof data.detail === "string") {
+        message = data.detail;
+      }
+    } catch {
+      /* no JSON */
+    }
+    throw new Error(message);
+  }
+  return res.json();
+}
+
