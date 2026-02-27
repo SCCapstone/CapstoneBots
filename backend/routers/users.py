@@ -20,6 +20,7 @@ from database import get_db
 from models import User, Project, ProjectMember, ProjectInvitation, ObjectLock, Commit, Branch, MemberRole, InvitationStatus
 import schemas
 from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user
+from utils.project_utils import delete_project_data
 
 # Initialize the router for authentication endpoints
 router = APIRouter()
@@ -216,83 +217,9 @@ async def delete_account(
         other_member_count = member_count_result.scalar()
 
         if other_member_count == 0:
-            # Sole member → delete entire project manually to avoid
-            # ORM circular-dependency between Branch ↔ Commit.
-            pid = project.project_id
-
-            # Delete S3 objects linked to this project's blender_objects
-            try:
-                s3_rows = await db.execute(sa_text(
-                    "SELECT bo.json_data_path, bo.mesh_data_path FROM blender_objects bo "
-                    "JOIN commits c ON bo.commit_id = c.commit_id "
-                    "WHERE c.project_id = :pid"
-                ), {"pid": str(pid)})
-                s3_paths = []
-                for row in s3_rows:
-                    for path in (row[0], row[1]):
-                        if path and isinstance(path, str) and path.startswith("s3://"):
-                            s3_paths.append(path)
-
-                if s3_paths:
-                    import os, boto3
-                    s3_client = boto3.client(
-                        "s3",
-                        region_name=os.environ.get("S3_REGION", "us-east-1"),
-                        aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("S3_ACCESS_KEY"),
-                        aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get("S3_SECRET_KEY"),
-                    )
-                    from collections import defaultdict
-                    bucket_keys: dict[str, list[str]] = defaultdict(list)
-                    for s3_uri in s3_paths:
-                        parts = s3_uri[5:]
-                        slash = parts.find("/")
-                        if slash > 0:
-                            bucket_keys[parts[:slash]].append(parts[slash + 1:])
-                    for bucket, keys in bucket_keys.items():
-                        for i in range(0, len(keys), 1000):
-                            batch = keys[i:i + 1000]
-                            s3_client.delete_objects(
-                                Bucket=bucket,
-                                Delete={"Objects": [{"Key": k} for k in batch], "Quiet": True},
-                            )
-                    import logging
-                    logging.getLogger(__name__).info(f"Deleted {len(s3_paths)} S3 objects for project {pid}")
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"S3 cleanup failed for project {pid}: {e}")
-
-            # Break circular FKs first
-            await db.execute(sa_text(
-                "UPDATE branches SET head_commit_id = NULL WHERE project_id = :pid"
-            ), {"pid": str(pid)})
-            await db.execute(sa_text(
-                "UPDATE commits SET parent_commit_id = NULL WHERE project_id = :pid"
-            ), {"pid": str(pid)})
-
-            # blender_objects links via commit_id (not project_id) and has self-ref parent_object_id
-            await db.execute(sa_text(
-                "UPDATE blender_objects SET parent_object_id = NULL "
-                "WHERE commit_id IN (SELECT commit_id FROM commits WHERE project_id = :pid)"
-            ), {"pid": str(pid)})
-            await db.execute(sa_text(
-                "DELETE FROM blender_objects "
-                "WHERE commit_id IN (SELECT commit_id FROM commits WHERE project_id = :pid)"
-            ), {"pid": str(pid)})
-
-            # Delete remaining child tables that DO have project_id
-            for tbl in [
-                "object_locks", "merge_conflicts",
-                "commits", "branches", "project_metadata",
-                "project_invitations", "project_members",
-            ]:
-                await db.execute(sa_text(
-                    f"DELETE FROM {tbl} WHERE project_id = :pid"
-                ), {"pid": str(pid)})
-
-            # Delete the project itself
-            await db.execute(sa_text(
-                "DELETE FROM projects WHERE project_id = :pid"
-            ), {"pid": str(pid)})
+            # Sole member → delete entire project using the shared helper
+            # to avoid ORM circular-dependency between Branch ↔ Commit.
+            await delete_project_data(db, project.project_id)
 
             # Expunge the ORM object so SQLAlchemy doesn't try to flush it
             await db.execute(sa_text("SELECT 1"))  # sync the session
