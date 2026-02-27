@@ -19,8 +19,8 @@ from sqlalchemy.exc import IntegrityError
 from database import get_db
 from models import User, Project, ProjectMember, ProjectInvitation, ObjectLock, Commit, Branch, MemberRole, InvitationStatus
 import schemas
-from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user, create_password_reset_token, decode_password_reset_token
-from utils.email import send_password_reset_email
+from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user, create_password_reset_token, decode_password_reset_token, create_email_verification_token, decode_email_verification_token
+from utils.email import send_password_reset_email, send_verification_email
 
 # Initialize the router for authentication endpoints
 router = APIRouter()
@@ -83,6 +83,13 @@ async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db))
     await db.commit()
     await db.refresh(new_user)  # Refresh to get generated fields (e.g., user_id, created_at)
     
+    # Send verification email (non-blocking: account is created even if email fails)
+    try:
+        token = create_email_verification_token(new_user.email)
+        send_verification_email(new_user.email, token)
+    except Exception:
+        pass  # Email failure is logged in the email utility; don't block signup
+    
     return new_user
 
 
@@ -131,11 +138,77 @@ async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    # Block login for unverified accounts
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email not verified. Please check your inbox for the verification link.",
+        )
+    
     # Generate JWT token with user's email as the subject claim
     # The token can be decoded later to identify the authenticated user
     access_token = create_access_token(data={"sub": user.email})
     
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.post("/verify-email")
+async def verify_email(body: schemas.VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Verify a user's email address using the token sent during registration.
+    """
+    from jose import JWTError
+
+    try:
+        payload = decode_email_verification_token(body.token)
+    except (JWTError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification link.",
+        )
+
+    email = payload.get("sub")
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalars().first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification link.",
+        )
+
+    if user.is_verified:
+        return {"message": "Email is already verified. You can log in."}
+
+    from datetime import datetime
+    user.is_verified = True
+    user.email_verified_at = datetime.utcnow()
+    await db.commit()
+
+    return {"message": "Email verified successfully! You can now log in."}
+
+
+@router.post("/resend-verification")
+async def resend_verification(body: schemas.ResendVerificationRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Resend the verification email.
+
+    Always returns a generic success message to prevent user enumeration.
+    """
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalars().first()
+
+    if user and not user.is_verified:
+        token = create_email_verification_token(user.email)
+        try:
+            send_verification_email(user.email, token)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unable to send verification email. Please try again later.",
+            )
+
+    return {"message": "If that email is registered and unverified, a verification link has been sent."}
 
 
 @router.post("/forgot-password")

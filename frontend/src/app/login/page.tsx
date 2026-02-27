@@ -2,7 +2,7 @@
 
 import { useState, FormEvent, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { loginApi } from "@/lib/authApi";
+import { loginApi, resendVerificationApi } from "@/lib/authApi";
 import { useAuth } from "@/components/AuthProvider";
 import Link from "next/link";
 
@@ -14,6 +14,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [unverified, setUnverified] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendMsg, setResendMsg] = useState("");
 
   // ⬇ Prevent login page flash
   useEffect(() => {
@@ -34,16 +37,37 @@ export default function LoginPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
+    setUnverified(false);
+    setResendMsg("");
     setLoading(true);
 
     try {
       const res = await loginApi(email, password);
       login(res.access_token);
       router.replace("/projects");
-    } catch {
-      setError("Invalid email or password.");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Login failed.";
+      if (message.toLowerCase().includes("not verified")) {
+        setUnverified(true);
+      }
+      setError(message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleResendVerification() {
+    setResending(true);
+    setResendMsg("");
+    try {
+      await resendVerificationApi(email);
+      setResendMsg("Verification email sent! Check your inbox.");
+    } catch (err: unknown) {
+      setResendMsg(
+        err instanceof Error ? err.message : "Failed to resend."
+      );
+    } finally {
+      setResending(false);
     }
   }
 
@@ -72,7 +96,24 @@ export default function LoginPage() {
 
         {/* Error */}
         {error && (
-          <p className="mb-3 text-xs text-red-400">{error}</p>
+          <div className="mb-3">
+            <p className="text-xs text-red-400">{error}</p>
+            {unverified && (
+              <div className="mt-2">
+                <button
+                  type="button"
+                  onClick={handleResendVerification}
+                  disabled={resending}
+                  className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-60"
+                >
+                  {resending ? "Sending…" : "Resend verification email"}
+                </button>
+                {resendMsg && (
+                  <p className="mt-1 text-xs text-emerald-400">{resendMsg}</p>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Form */}

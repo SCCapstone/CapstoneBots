@@ -17,7 +17,7 @@ export default function SignupPage() {
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
+  const [success, setSuccess] = useState(false);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -43,7 +43,7 @@ export default function SignupPage() {
         password,
       });
 
-      router.replace("/login");
+      setSuccess(true);
     } catch (err: any) {
       setError(err?.message || "Failed to create account.");
     } finally {
@@ -78,12 +78,24 @@ export default function SignupPage() {
         {error && (
           <p className="mb-3 text-xs text-red-400">{error}</p>
         )}
-        {info && (
-          <p className="mb-3 text-xs text-emerald-400">{info}</p>
-        )}
 
-        {/* Form */}
-        <form
+        {success ? (
+          <div className="space-y-4">
+            <div className="rounded-lg border border-emerald-800 bg-emerald-900/30 p-4 text-sm text-emerald-200">
+              Account created! Please check your email for a verification link
+              to activate your account.
+            </div>
+            <Link
+              href="/login"
+              className="inline-block rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 transition"
+            >
+              Go to Login
+            </Link>
+          </div>
+        ) : (
+          <>
+            {/* Form */}
+            <form
           onSubmit={handleSubmit}
           className="space-y-4 text-left"
           suppressHydrationWarning
@@ -173,6 +185,8 @@ export default function SignupPage() {
             Log in
           </a>
         </p>
+          </>
+        )}
       </div>
     </div>
   );

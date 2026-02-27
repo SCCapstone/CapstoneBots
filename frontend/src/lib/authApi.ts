@@ -35,7 +35,16 @@ export async function loginApi(email: string, password: string) {
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {
-    throw new Error(`Login failed: ${res.status}`);
+    let message = "Invalid email or password.";
+    try {
+      const data = await res.json();
+      if (data?.detail && typeof data.detail === "string") {
+        message = data.detail;
+      }
+    } catch {
+      /* no JSON */
+    }
+    throw new Error(message);
   }
   return res.json();
 }
@@ -147,3 +156,45 @@ export async function resetPasswordApi(token: string, new_password: string) {
   return res.json();
 }
 
+
+export async function verifyEmailApi(token: string) {
+  const res = await fetch(`${API_BASE}/api/auth/verify-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    let message = "Email verification failed";
+    try {
+      const data = await res.json();
+      if (data?.detail && typeof data.detail === "string") {
+        message = data.detail;
+      }
+    } catch {
+      /* no JSON */
+    }
+    throw new Error(message);
+  }
+  return res.json();
+}
+
+export async function resendVerificationApi(email: string) {
+  const res = await fetch(`${API_BASE}/api/auth/resend-verification`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    let message = "Failed to resend verification email";
+    try {
+      const data = await res.json();
+      if (data?.detail && typeof data.detail === "string") {
+        message = data.detail;
+      }
+    } catch {
+      /* no JSON */
+    }
+    throw new Error(message);
+  }
+  return res.json();
+}

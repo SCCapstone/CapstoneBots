@@ -81,3 +81,64 @@ def send_password_reset_email(to_email: str, reset_token: str) -> None:
         logger.error("Failed to send reset email to %s: %s", to_email, e)
         raise
 
+
+def send_verification_email(to_email: str, verification_token: str) -> None:
+    """
+    Send (or log) an email-verification email containing a one-time link.
+    """
+    verify_link = f"{FRONTEND_URL}/verify-email?token={verification_token}"
+
+    subject = "Blender Collab – Verify Your Email"
+    html_body = f"""\
+<html>
+<body style="font-family:sans-serif;color:#334155;">
+  <h2>Verify Your Email</h2>
+  <p>Thanks for signing up! Please click the link below to verify your
+  email address. This link expires in 24 hours.</p>
+  <p><a href="{verify_link}" style="color:#0284c7;">Verify my email</a></p>
+  <p style="font-size:0.85em;color:#64748b;">
+    If you didn't create an account, you can safely ignore this email.
+  </p>
+</body>
+</html>"""
+
+    text_body = (
+        "Verify Your Email\n\n"
+        "Thanks for signing up!\n"
+        f"Visit this link to verify your email (expires in 24 hours):\n\n{verify_link}\n\n"
+        "If you didn't create an account, you can safely ignore this email.\n"
+    )
+
+    # ---------- If SMTP is not configured, print to console ----------
+    if not SMTP_HOST:
+        print("\n" + "=" * 60)
+        print("  EMAIL VERIFICATION (SMTP not configured)")
+        print("=" * 60)
+        print(f"  To:   {to_email}")
+        print(f"  Link: {verify_link}")
+        print("=" * 60 + "\n")
+        logger.info("SMTP not configured – verification link printed to console for %s", to_email)
+        return
+
+    # ---------- Send via SMTP ----------
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+    msg.attach(MIMEText(text_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            if SMTP_USER and SMTP_PASSWORD:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_FROM, [to_email], msg.as_string())
+        logger.info("Verification email sent to %s", to_email)
+    except Exception as e:
+        logger.error("Failed to send verification email to %s: %s", to_email, e)
+        raise
+
+
