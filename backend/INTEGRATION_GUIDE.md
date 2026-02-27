@@ -380,4 +380,4 @@ async def test_create_commit_with_storage():
 
 ---
 
-**Last Updated**: December 2025
+**Last Updated**: February 2026

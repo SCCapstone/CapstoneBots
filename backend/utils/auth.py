@@ -35,6 +35,8 @@ if not SECRET_KEY:
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+PASSWORD_RESET_EXPIRE_MINUTES = 15
+EMAIL_VERIFY_EXPIRE_HOURS = 24
 
 # Validate token expiry settings
 if ACCESS_TOKEN_EXPIRE_MINUTES < 5:
@@ -144,6 +146,88 @@ def decode_access_token(token: str) -> dict:
     except JWTError as e:
         logger.warning(f"Token decode failed: {str(e)}")
         raise
+
+
+def create_password_reset_token(email: str) -> str:
+    """
+    Create a short-lived JWT for password reset.
+
+    The token contains a 'purpose' claim to prevent cross-use with login tokens.
+    """
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=PASSWORD_RESET_EXPIRE_MINUTES)
+    payload = {
+        "sub": email,
+        "purpose": "password-reset",
+        "exp": expire,
+        "iat": now,
+        "nbf": now,
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_password_reset_token(token: str) -> dict:
+    """
+    Decode a password-reset JWT and verify its purpose claim.
+
+    Returns the full payload dict (contains 'sub', 'iat', etc.).
+    Raises JWTError or ValueError on failure.
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError as e:
+        logger.warning(f"Reset token decode failed: {str(e)}")
+        raise
+
+    if payload.get("purpose") != "password-reset":
+        raise ValueError("Token is not a valid password-reset token")
+
+    if not payload.get("sub"):
+        raise ValueError("Token missing subject")
+
+    return payload
+
+
+def create_email_verification_token(email: str) -> str:
+    """
+    Create a short-lived JWT for email verification.
+
+    The token contains a 'purpose' claim to prevent cross-use with other tokens.
+    Expires after EMAIL_VERIFY_EXPIRE_HOURS (default 24h).
+    """
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(hours=EMAIL_VERIFY_EXPIRE_HOURS)
+    payload = {
+        "sub": email,
+        "purpose": "email-verification",
+        "exp": expire,
+        "iat": now,
+        "nbf": now,
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_email_verification_token(token: str) -> dict:
+    """
+    Decode an email-verification JWT and verify its purpose claim.
+
+    Returns the full payload dict (contains 'sub', 'iat', etc.).
+    Raises JWTError or ValueError on failure.
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError as e:
+        logger.warning(f"Verification token decode failed: {str(e)}")
+        raise
+
+    if payload.get("purpose") != "email-verification":
+        raise ValueError("Token is not a valid email-verification token")
+
+    if not payload.get("sub"):
+        raise ValueError("Token missing subject")
+
+    return payload
+
 
 # HTTP Bearer security scheme
 security = HTTPBearer(auto_error=True)

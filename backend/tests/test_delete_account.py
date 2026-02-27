@@ -26,9 +26,18 @@ main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 app = main.app
 
+from utils.auth import create_email_verification_token
+
+
+def _verify_email(client, email: str):
+    """Helper: generate a verification token and call /api/auth/verify-email."""
+    token = create_email_verification_token(email)
+    r = client.post("/api/auth/verify-email", json={"token": token})
+    assert r.status_code == 200, r.text
+
 
 def _register_and_login(client, username=None, email=None, password="testpass123"):
-    """Helper: register a user and return (user_data, access_token)."""
+    """Helper: register a user, verify email, and return (user_data, access_token)."""
     username = username or f"user_{uuid4().hex[:8]}"
     email = email or f"{uuid4().hex[:8]}@example.com"
 
@@ -39,6 +48,9 @@ def _register_and_login(client, username=None, email=None, password="testpass123
     })
     assert r.status_code == 201, r.text
     user_data = r.json()
+
+    # Verify email before logging in (required since email verification blocks login)
+    _verify_email(client, email)
 
     r = client.post("/api/auth/login", json={
         "email": email,

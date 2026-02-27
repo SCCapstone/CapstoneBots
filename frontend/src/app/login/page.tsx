@@ -2,7 +2,7 @@
 
 import { useState, FormEvent, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { loginApi } from "@/lib/authApi";
+import { loginApi, resendVerificationApi, ApiError } from "@/lib/authApi";
 import { useAuth } from "@/components/AuthProvider";
 import Link from "next/link";
 
@@ -14,6 +14,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [unverified, setUnverified] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendMsg, setResendMsg] = useState("");
 
   // ⬇ Prevent login page flash
   useEffect(() => {
@@ -34,16 +37,45 @@ export default function LoginPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
+    setUnverified(false);
+    setResendMsg("");
     setLoading(true);
 
     try {
       const res = await loginApi(email, password);
       login(res.access_token);
       router.replace("/projects");
-    } catch {
-      setError("Invalid email or password.");
+    } catch (err: unknown) {
+      let message = "Login failed.";
+      let isUnverified = false;
+
+      if (err instanceof ApiError) {
+        message = err.message;
+        isUnverified =
+          err.status === 403 || err.code === "EMAIL_NOT_VERIFIED";
+      } else if (err instanceof Error) {
+        message = err.message;
+      }
+
+      setUnverified(isUnverified);
+      setError(message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleResendVerification() {
+    setResending(true);
+    setResendMsg("");
+    try {
+      await resendVerificationApi(email);
+      setResendMsg("Verification email sent! Check your inbox.");
+    } catch (err: unknown) {
+      setResendMsg(
+        err instanceof Error ? err.message : "Failed to resend."
+      );
+    } finally {
+      setResending(false);
     }
   }
 
@@ -72,13 +104,31 @@ export default function LoginPage() {
 
         {/* Error */}
         {error && (
-          <p className="mb-3 text-xs text-red-400">{error}</p>
+          <div className="mb-3">
+            <p className="text-xs text-red-400">{error}</p>
+            {unverified && (
+              <div className="mt-2">
+                <button
+                  type="button"
+                  onClick={handleResendVerification}
+                  disabled={resending}
+                  className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-60"
+                >
+                  {resending ? "Sending…" : "Resend verification email"}
+                </button>
+                {resendMsg && (
+                  <p className="mt-1 text-xs text-emerald-400">{resendMsg}</p>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Form */}
         <form
           onSubmit={handleSubmit}
           className="space-y-4 text-left"
+          suppressHydrationWarning
         >
           <div>
             <label className="block text-xs text-slate-300 mb-1">
@@ -100,6 +150,7 @@ export default function LoginPage() {
               </label>
               <button
                 type="button"
+                onClick={() => router.push("/login/forgot-password")}
                 className="text-xs text-sky-400 hover:text-sky-300"
               >
                 Forgot password?
@@ -112,6 +163,7 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-sky-500"
+              suppressHydrationWarning
             />
           </div>
 

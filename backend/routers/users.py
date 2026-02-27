@@ -19,7 +19,8 @@ from sqlalchemy.exc import IntegrityError
 from database import get_db
 from models import User, Project, ProjectMember, ProjectInvitation, ObjectLock, Commit, Branch, MemberRole, InvitationStatus
 import schemas
-from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user
+from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user, create_password_reset_token, decode_password_reset_token, create_email_verification_token, decode_email_verification_token
+from utils.email import send_password_reset_email, send_verification_email
 
 # Initialize the router for authentication endpoints
 router = APIRouter()
@@ -82,6 +83,13 @@ async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db))
     await db.commit()
     await db.refresh(new_user)  # Refresh to get generated fields (e.g., user_id, created_at)
     
+    # Send verification email (non-blocking: account is created even if email fails)
+    try:
+        token = create_email_verification_token(new_user.email)
+        send_verification_email(new_user.email, token)
+    except Exception:
+        pass  # Email failure is logged in the email utility; don't block signup
+    
     return new_user
 
 
@@ -130,11 +138,168 @@ async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    # Block login for unverified accounts
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": "Email not verified. Please check your inbox for the verification link.",
+                "code": "EMAIL_NOT_VERIFIED",
+            },
+        )
+    
     # Generate JWT token with user's email as the subject claim
     # The token can be decoded later to identify the authenticated user
     access_token = create_access_token(data={"sub": user.email})
     
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.post("/verify-email")
+async def verify_email(body: schemas.VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Verify a user's email address using the token sent during registration.
+    """
+    from jose import JWTError
+
+    try:
+        payload = decode_email_verification_token(body.token)
+    except (JWTError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification link.",
+        )
+
+    email = payload.get("sub")
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalars().first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification link.",
+        )
+
+    if user.is_verified:
+        return {"message": "Email is already verified. You can log in."}
+
+    from datetime import datetime
+    user.is_verified = True
+    user.email_verified_at = datetime.utcnow()
+    await db.commit()
+
+    return {"message": "Email verified successfully! You can now log in."}
+
+
+@router.post("/resend-verification")
+async def resend_verification(body: schemas.ResendVerificationRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Resend the verification email.
+
+    Always returns a generic success message to prevent user enumeration.
+    """
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalars().first()
+
+    if user and not user.is_verified:
+        token = create_email_verification_token(user.email)
+        try:
+            send_verification_email(user.email, token)
+        except Exception:
+            # Log the failure server-side but return the same generic 200 to
+            # prevent user enumeration (a 502 only for real-and-unverified
+            # accounts would leak account existence).
+            import logging
+            logging.getLogger(__name__).error(
+                "Failed to send verification email to %s", user.email
+            )
+
+    return {"message": "If that email is registered and unverified, a verification link has been sent."}
+
+
+@router.post("/forgot-password")
+async def forgot_password(body: schemas.ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Request a password-reset email.
+
+    Always returns a generic success message regardless of whether the email
+    exists in the system — this prevents user enumeration.
+    """
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalars().first()
+
+    if user:
+        token = create_password_reset_token(user.email)
+        try:
+            send_password_reset_email(user.email, token)
+        except Exception:
+            # Log the failure server-side but return the same generic 200 to
+            # prevent user enumeration.
+            import logging
+            logging.getLogger(__name__).error(
+                "Failed to send reset email to %s", user.email
+            )
+
+    return {"message": "If that email is registered, a reset link has been sent."}
+
+
+@router.post("/reset-password")
+async def reset_password(body: schemas.ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Reset a user's password using a valid reset token.
+
+    The token must be a valid, unexpired password-reset JWT.
+    Tokens issued before the last password change are rejected (single-use).
+    """
+    from datetime import datetime, timezone
+    from jose import JWTError
+
+    # Validate new password length
+    if len(body.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters long.",
+        )
+
+    # Decode & validate token
+    try:
+        payload = decode_password_reset_token(body.token)
+    except (JWTError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset link.",
+        )
+
+    email: str = payload["sub"]
+    token_iat = datetime.fromtimestamp(payload["iat"], tz=timezone.utc)
+
+    # Look up user
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalars().first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset link.",
+        )
+
+    # Single-use check: reject if token was issued before the last password change
+    if user.password_changed_at:
+        last_change = user.password_changed_at
+        if last_change.tzinfo is None:
+            last_change = last_change.replace(tzinfo=timezone.utc)
+        if token_iat <= last_change:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This reset link has already been used.",
+            )
+
+    # Update password
+    user.password_hash = get_password_hash(body.new_password)
+    user.password_changed_at = datetime.utcnow()
+    await db.commit()
+
+    return {"message": "Password has been reset successfully."}
 
 
 @router.get("/me", response_model=schemas.UserResponse)

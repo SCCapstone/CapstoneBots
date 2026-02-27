@@ -276,7 +276,7 @@ export default function ProjectPage() {
       </div>
 
       {/* Two-column layout */}
-      <div className="mx-auto flex max-w-7xl gap-5">
+      <div className="mx-auto flex max-w-7xl gap-5 items-center min-h-[calc(100vh-6rem)]">
         {/* Left: Main content */}
         <div className="min-w-0 flex-1 space-y-5">
           {/* Header + actions */}

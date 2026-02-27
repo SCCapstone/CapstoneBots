@@ -15,6 +15,7 @@ class UserResponse(UserBase):
     user_id: UUID
     created_at: datetime
     last_login: Optional[datetime]
+    is_verified: bool
 
     class Config:
         from_attributes = True
@@ -32,6 +33,21 @@ class TokenData(BaseModel):
 
 class DeleteAccountRequest(BaseModel):
     password: str
+
+# ============== Password Reset Schemas ==============
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+# ============== Email Verification Schemas ==============
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
 
 # ============== Project Schemas ==============
 class ProjectBase(BaseModel):
