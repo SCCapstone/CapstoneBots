@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, text as sa_text
 from sqlalchemy.orm import joinedload
 
 from database import get_db
@@ -40,6 +40,7 @@ from schemas import (
 )
 from utils.auth import get_current_user
 from utils.permissions import check_project_access, is_project_member, get_user_projects
+from utils.project_utils import delete_project_data
 
 # Initialize the router for project-related endpoints
 router = APIRouter()
@@ -267,71 +268,7 @@ async def delete_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Delete S3 objects linked to this project's blender_objects
-    from sqlalchemy import text as sa_text
-    pid = str(project_id)
-    try:
-        # Gather all S3 paths from blender_objects via commits
-        s3_rows = await db.execute(sa_text(
-            "SELECT bo.json_data_path, bo.mesh_data_path FROM blender_objects bo "
-            "JOIN commits c ON bo.commit_id = c.commit_id "
-            "WHERE c.project_id = :pid"
-        ), {"pid": pid})
-        s3_paths = []
-        for row in s3_rows:
-            for path in (row[0], row[1]):
-                if path and isinstance(path, str) and path.startswith("s3://"):
-                    s3_paths.append(path)
-
-        if s3_paths:
-            import os, boto3
-            s3_client = boto3.client(
-                "s3",
-                region_name=os.environ.get("S3_REGION", "us-east-1"),
-                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("S3_ACCESS_KEY"),
-                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get("S3_SECRET_KEY"),
-            )
-            # Group by bucket and batch delete (max 1000 per request)
-            from collections import defaultdict
-            bucket_keys: dict[str, list[str]] = defaultdict(list)
-            for s3_uri in s3_paths:
-                parts = s3_uri[5:]  # strip "s3://"
-                slash = parts.find("/")
-                if slash > 0:
-                    bucket_keys[parts[:slash]].append(parts[slash + 1:])
-            for bucket, keys in bucket_keys.items():
-                for i in range(0, len(keys), 1000):
-                    batch = keys[i:i + 1000]
-                    s3_client.delete_objects(
-                        Bucket=bucket,
-                        Delete={"Objects": [{"Key": k} for k in batch], "Quiet": True},
-                    )
-            import logging
-            logging.getLogger(__name__).info(f"Deleted {len(s3_paths)} S3 objects for project {project_id}")
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning(f"S3 cleanup failed for project {project_id}: {e}")
-
-    # Use raw SQL to avoid ORM circular dependency between Branch ↔ Commit
-    await db.execute(sa_text("UPDATE branches SET head_commit_id = NULL WHERE project_id = :pid"), {"pid": pid})
-    await db.execute(sa_text("UPDATE commits SET parent_commit_id = NULL WHERE project_id = :pid"), {"pid": pid})
-    await db.execute(sa_text(
-        "UPDATE blender_objects SET parent_object_id = NULL "
-        "WHERE commit_id IN (SELECT commit_id FROM commits WHERE project_id = :pid)"
-    ), {"pid": pid})
-    await db.execute(sa_text(
-        "DELETE FROM blender_objects "
-        "WHERE commit_id IN (SELECT commit_id FROM commits WHERE project_id = :pid)"
-    ), {"pid": pid})
-
-    for tbl in [
-        "object_locks", "merge_conflicts",
-        "commits", "branches", "project_metadata",
-        "project_invitations", "project_members",
-    ]:
-        await db.execute(sa_text(f"DELETE FROM {tbl} WHERE project_id = :pid"), {"pid": pid})
-
-    await db.execute(sa_text("DELETE FROM projects WHERE project_id = :pid"), {"pid": pid})
+    await delete_project_data(db, project_id)
     await db.commit()
 
 # ============== Branch Routes ==============
@@ -1058,7 +995,13 @@ async def add_project_member(
         project_id, current_user.user_id, db, require_role=MemberRole.editor
     )
 
-    # Resolve user by email or username
+    # Only project owners may assign the owner role when inviting members
+    if role == MemberRole.owner.value and caller_role != MemberRole.owner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only project owners can assign the owner role.",
+        )
+    # Resolve user
     if not member_data.email and not member_data.username:
         raise HTTPException(status_code=400, detail="Provide either email or username.")
 
@@ -1071,11 +1014,10 @@ async def add_project_member(
     if not user_to_add:
         raise HTTPException(status_code=404, detail="No user found with that email or username.")
 
-    # Check if already the project owner
-    if user_to_add.user_id == project.owner_id:
-        raise HTTPException(status_code=409, detail="User is already the project owner.")
-
-    # Check if already a member
+    # Prevent self-invitation
+    if user_to_add.user_id == current_user.user_id:
+        raise HTTPException(status_code=400, detail="You cannot invite yourself to a project.")
+    # Check already member
     existing = await db.execute(
         select(ProjectMember).where(
             ProjectMember.project_id == project_id,
