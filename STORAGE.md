@@ -291,15 +291,52 @@ except S3Error as e:
 
 ## Configuration
 
-Required environment variables:
+The storage system is S3-compatible and works with both **AWS S3** (production) and **MinIO** (local development).
+
+### AWS S3 (Production)
+
+Set these environment variables in your `.env` or `docker-compose.yml`:
 
 ```bash
-S3_ENDPOINT=localhost:9000        # MinIO endpoint
-S3_ACCESS_KEY=minioadmin          # Access key
-S3_SECRET_KEY=minioadmin          # Secret key
-S3_SECURE=false                   # Use HTTPS (true/false)
-S3_REGION=us-east-1               # Region
-S3_BUCKET=capstonebots            # Bucket name
+S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
+S3_ACCESS_KEY=<your-aws-access-key>
+S3_SECRET_KEY=<your-aws-secret-key>
+S3_SECURE=true
+S3_BUCKET=blender-vcs-prod
+```
+
+> The bucket must already exist in your AWS account. The backend will not create buckets on AWS automatically.
+
+### MinIO (Local Development)
+
+If you prefer local storage, the `docker-compose.yml` includes a MinIO service:
+
+```bash
+S3_ENDPOINT=http://minio:9000
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin
+S3_SECURE=false
+S3_BUCKET=capstonebots
+```
+
+The MinIO web console is available at [http://localhost:9001](http://localhost:9001) (login: `minioadmin` / `minioadmin`).
+
+### Switching Between S3 and MinIO
+
+The `docker-compose.yml` defaults to AWS S3. To use local MinIO instead, override the S3 variables in your `.env`:
+
+```env
+S3_ENDPOINT=http://minio:9000
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin
+S3_SECURE=false
+S3_BUCKET=capstonebots
+```
+
+Or pass them directly to `docker compose`:
+
+```bash
+S3_ENDPOINT=http://minio:9000 S3_ACCESS_KEY=minioadmin S3_SECRET_KEY=minioadmin S3_SECURE=false S3_BUCKET=capstonebots docker compose up --build
 ```
 
 ## Usage Examples
@@ -410,5 +447,5 @@ Solution: Archive old versions or increase storage capacity
 
 ---
 
-**Documentation Last Updated**: December 2025
+**Documentation Last Updated**: February 2026
 **API Version**: 1.0.0

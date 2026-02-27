@@ -1,31 +1,53 @@
-# CapstoneBots Backend
+# Blender Collab — Backend
 
-This is the FastAPI backend for the CapstoneBots project.
+FastAPI backend for the Blender Collab project. Provides REST API endpoints for authentication, project management, collaboration, and S3-based file storage.
 
-## Setup and Run
+## Features
+
+- **Authentication**: JWT-based login, registration, email verification, password reset
+- **Projects**: CRUD operations, branching, commits, version history
+- **Collaboration**: Invite members by email, role-based permissions (owner / editor / viewer)
+- **Storage**: S3/MinIO integration for Blender object uploads, downloads, and deduplication
+- **Email**: SMTP support for verification and password reset (falls back to console output when SMTP is not configured)
+
+## Setup
 
 ### Prerequisites
+
 - Python 3.9+
-- PostgreSQL database running
+- PostgreSQL database
+- S3-compatible storage (MinIO or AWS S3) for file operations
 
 ### Installation
 
-1.  **Create a virtual environment:**
-    ```bash
-    python3 -m venv .venv
-    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-    ```
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-2.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
+### Environment Variables
 
-3.  **Environment Variables:**
-    Create a `.env` file in this directory if you need to override defaults.
-    ```env
-    DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/capstonebots
-    ```
+Create a `.env` file in this directory (or set via Docker Compose):
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DATABASE_URL` | **Yes** | — | PostgreSQL async connection string |
+| `JWT_SECRET` | **Yes** | — | Secret for signing JWT tokens |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | No | `60` | JWT token lifetime |
+| `S3_ENDPOINT` | No | `https://s3.us-east-1.amazonaws.com` | S3-compatible endpoint (use `http://minio:9000` for local MinIO) |
+| `S3_ACCESS_KEY` | **Yes** | — | S3 access key |
+| `S3_SECRET_KEY` | **Yes** | — | S3 secret key |
+| `S3_SECURE` | No | `true` | Use HTTPS for S3 (`false` for local MinIO) |
+| `S3_BUCKET` | No | `blender-vcs-prod` | S3 bucket name (`capstonebots` for local MinIO) |
+| `S3_REGION` | No | `us-east-1` | S3 region |
+| `SMTP_HOST` | No | — | SMTP server (omit to print links to console) |
+| `SMTP_PORT` | No | `587` | SMTP port |
+| `SMTP_USER` | No | — | SMTP login |
+| `SMTP_PASSWORD` | No | — | SMTP password |
+| `SMTP_FROM` | No | `SMTP_USER` | From address for outgoing emails |
+| `FRONTEND_URL` | No | `http://localhost:3000` | Base URL used in email links |
+| `INVITE_EXPIRY_DAYS` | No | `7` | Days before project invitations expire |
 
 ### Running the Server
 
@@ -33,28 +55,84 @@ This is the FastAPI backend for the CapstoneBots project.
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The API documentation will be available at [http://localhost:8000/docs](http://localhost:8000/docs).
+API documentation: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+## API Overview
+
+### Auth (`/api/auth`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/register` | Create a new account |
+| POST | `/login` | Authenticate and receive JWT |
+| GET | `/me` | Get current user info |
+| POST | `/verify-email` | Verify email with token |
+| POST | `/resend-verification` | Resend verification email |
+| POST | `/forgot-password` | Request password reset email |
+| POST | `/reset-password` | Reset password with token |
+| DELETE | `/account` | Delete account (with password confirmation) |
+
+### Projects (`/api/projects`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | List user's projects |
+| POST | `/` | Create a new project |
+| GET | `/{id}` | Get project details |
+| PUT | `/{id}` | Update project |
+| DELETE | `/{id}` | Delete project |
+| POST | `/{id}/commits` | Create a commit |
+| GET | `/{id}/commits` | List commits |
+| POST | `/{id}/branches` | Create a branch |
+| GET | `/{id}/branches` | List branches |
+| POST | `/{id}/members` | Invite a collaborator |
+| GET | `/{id}/members` | List project members |
+
+### Storage (`/api/projects`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/{id}/objects/upload` | Upload Blender object |
+| GET | `/{id}/commits/{cid}/download` | Download full commit |
+| GET | `/{id}/versions` | Version history |
+| GET | `/{id}/storage-stats` | Storage usage stats |
 
 ## Database Migrations
 
-To run migrations (if Alembic is configured):
-```bash
-alembic upgrade head
-```
+Migrations live in `migrations/versions/` and are applied automatically on startup. To add a new migration, create a numbered file following the existing pattern (e.g., `006_your_migration.py`).
+
+Current migrations:
+1. `001_initial.py` — Base tables
+2. `002_nullable_author_for_account_deletion.py`
+3. `003_add_invitations_and_roles.py`
+4. `004_add_password_changed_at.py`
+5. `005_add_email_verification.py`
 
 ## Testing
 
-Automated testing is used to verify core backend functionality and catch regressions early.  
-We use **pytest** for unit testing and **FastAPI’s TestClient (httpx)** for behavioral/API testing.
-
-### Running Tests
-
-From the `backend/` directory:
-Tests live in: backend/tests/
+Tests use **pytest** and live in `tests/`.
 
 ```bash
 source .venv/bin/activate
-pytest -q
 pytest -v
 ```
-Note: Some integration tests are skipped unless MinIO is running.
+
+Test files:
+- `tests/test_auth.py` — Authentication flows
+- `tests/test_behavior_projects_auth.py` — Project authorization
+- `tests/test_delete_account.py` — Account deletion
+- `tests/test_storage.py` — Storage utilities
+- `tests/test_unit_schemas.py` — Schema validation
+
+> Some integration tests are skipped unless MinIO is running.
+
+## Related Documentation
+
+- [Storage & Versioning](../STORAGE.md) — Complete storage system guide
+- [Integration Guide](./INTEGRATION_GUIDE.md) — Adding storage to commit workflows
+- [Storage Quick Reference](./storage/QUICK_REFERENCE.md) — API cheat sheet
+- [Architecture Diagrams](../ARCHITECTURE_DIAGRAMS.md) — Visual data flows
+
+---
+
+**Last Updated**: February 2026
