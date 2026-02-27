@@ -1,9 +1,14 @@
 """
 Email utility for sending transactional emails (e.g. password-reset links).
 
-Reads SMTP settings from environment variables.  When SMTP_HOST is not
-configured the email body is logged to the console instead — handy for
-local development / testing.
+Reads SMTP settings from environment variables.
+
+**Security note:**  When SMTP_HOST is *not* configured the module will only
+print token-bearing links to the console if ``EMAIL_DEBUG=true`` is also
+set.  This prevents accidental token leakage in staging/production
+environments where logs may be accessible to a wider audience.  If SMTP
+is unconfigured and EMAIL_DEBUG is not enabled the send functions will
+raise, signalling to the caller that delivery failed (fail-closed).
 """
 
 import os
@@ -20,6 +25,10 @@ SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "noreply@blendercollab.com")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+# Only print token-bearing links to stdout when this is explicitly enabled.
+# Keeps local dev convenient while preventing accidental leaks elsewhere.
+EMAIL_DEBUG = os.getenv("EMAIL_DEBUG", "").lower() in ("true", "1", "yes")
 
 
 def send_password_reset_email(to_email: str, reset_token: str) -> None:
@@ -49,16 +58,24 @@ def send_password_reset_email(to_email: str, reset_token: str) -> None:
         "If you didn't request this, you can safely ignore this email.\n"
     )
 
-    # ---------- If SMTP is not configured, print to console ----------
+    # ---------- If SMTP is not configured ----------
     if not SMTP_HOST:
-        print("\n" + "=" * 60)
-        print("  PASSWORD RESET (SMTP not configured)")
-        print("=" * 60)
-        print(f"  To:   {to_email}")
-        print(f"  Link: {reset_link}")
-        print("=" * 60 + "\n")
-        logger.info("SMTP not configured – reset link printed to console for %s", to_email)
-        return
+        if EMAIL_DEBUG:
+            print("\n" + "=" * 60)
+            print("  PASSWORD RESET (EMAIL_DEBUG mode – SMTP not configured)")
+            print("=" * 60)
+            print(f"  To:   {to_email}")
+            print(f"  Link: {reset_link}")
+            print("=" * 60 + "\n")
+            logger.info("EMAIL_DEBUG – reset link printed to console for %s", to_email)
+            return
+
+        # Fail closed: SMTP is required outside of EMAIL_DEBUG mode.
+        logger.error(
+            "SMTP_HOST is not configured and EMAIL_DEBUG is not enabled. "
+            "Cannot send password-reset email to %s.", to_email,
+        )
+        raise RuntimeError("Email delivery is not configured. Set SMTP_HOST or enable EMAIL_DEBUG for local development.")
 
     # ---------- Send via SMTP ----------
     msg = MIMEMultipart("alternative")
@@ -109,16 +126,24 @@ def send_verification_email(to_email: str, verification_token: str) -> None:
         "If you didn't create an account, you can safely ignore this email.\n"
     )
 
-    # ---------- If SMTP is not configured, print to console ----------
+    # ---------- If SMTP is not configured ----------
     if not SMTP_HOST:
-        print("\n" + "=" * 60)
-        print("  EMAIL VERIFICATION (SMTP not configured)")
-        print("=" * 60)
-        print(f"  To:   {to_email}")
-        print(f"  Link: {verify_link}")
-        print("=" * 60 + "\n")
-        logger.info("SMTP not configured – verification link printed to console for %s", to_email)
-        return
+        if EMAIL_DEBUG:
+            print("\n" + "=" * 60)
+            print("  EMAIL VERIFICATION (EMAIL_DEBUG mode – SMTP not configured)")
+            print("=" * 60)
+            print(f"  To:   {to_email}")
+            print(f"  Link: {verify_link}")
+            print("=" * 60 + "\n")
+            logger.info("EMAIL_DEBUG – verification link printed to console for %s", to_email)
+            return
+
+        # Fail closed: SMTP is required outside of EMAIL_DEBUG mode.
+        logger.error(
+            "SMTP_HOST is not configured and EMAIL_DEBUG is not enabled. "
+            "Cannot send verification email to %s.", to_email,
+        )
+        raise RuntimeError("Email delivery is not configured. Set SMTP_HOST or enable EMAIL_DEBUG for local development.")
 
     # ---------- Send via SMTP ----------
     msg = MIMEMultipart("alternative")

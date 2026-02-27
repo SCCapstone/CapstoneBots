@@ -39,12 +39,13 @@ JWT_SECRET=<generate with: python -c "import secrets; print(secrets.token_urlsaf
 S3_ACCESS_KEY=##################### or minioadmin for local MinIO
 S3_SECRET_KEY=##################### or minioadmin for local MinIO
 
-# SMTP (optional — if not set, verification/reset links are printed to the console)
+# SMTP (optional — if not set, email delivery fails closed; set EMAIL_DEBUG=true for local dev to print links to console)
 SMTP_HOST=example.com
 SMTP_PORT=####
 SMTP_USER=your-email@example.com
 SMTP_PASSWORD=your-smtp-password
 SMTP_FROM=noreply@yourdomain.com
+EMAIL_DEBUG=true
 FRONTEND_URL=http://localhost:3000
 ```
 
@@ -124,11 +125,12 @@ All variables are set in the root `.env` file and injected into containers via `
 | `S3_SECURE` | No | `true` | Use HTTPS for S3 (`false` for local MinIO) |
 | `S3_BUCKET` | No | `blender-vcs-prod` | S3 bucket name (`capstonebots` for local MinIO) |
 | `S3_REGION` | No | `us-east-1` | S3 region |
-| `SMTP_HOST` | No | — | SMTP server (omit to print links to console) |
+| `SMTP_HOST` | No | — | SMTP server (required for email delivery; see `EMAIL_DEBUG`) |
 | `SMTP_PORT` | No | `2525` | SMTP port |
 | `SMTP_USER` | No | — | SMTP login |
 | `SMTP_PASSWORD` | No | — | SMTP password |
 | `SMTP_FROM` | No | `SMTP_USER` | From address for emails |
+| `EMAIL_DEBUG` | No | `false` | Print verification/reset links to console when SMTP is not configured (local dev only) |
 | `FRONTEND_URL` | No | `http://localhost:3000` | Base URL for email links |
 | `INVITE_EXPIRY_DAYS` | No | `7` | Days before invitations expire |
 

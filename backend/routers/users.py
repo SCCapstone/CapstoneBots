@@ -142,7 +142,10 @@ async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(
     if not user.is_verified:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Email not verified. Please check your inbox for the verification link.",
+            detail={
+                "message": "Email not verified. Please check your inbox for the verification link.",
+                "code": "EMAIL_NOT_VERIFIED",
+            },
         )
     
     # Generate JWT token with user's email as the subject claim
@@ -203,9 +206,12 @@ async def resend_verification(body: schemas.ResendVerificationRequest, db: Async
         try:
             send_verification_email(user.email, token)
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Unable to send verification email. Please try again later.",
+            # Log the failure server-side but return the same generic 200 to
+            # prevent user enumeration (a 502 only for real-and-unverified
+            # accounts would leak account existence).
+            import logging
+            logging.getLogger(__name__).error(
+                "Failed to send verification email to %s", user.email
             )
 
     return {"message": "If that email is registered and unverified, a verification link has been sent."}
@@ -227,9 +233,11 @@ async def forgot_password(body: schemas.ForgotPasswordRequest, db: AsyncSession 
         try:
             send_password_reset_email(user.email, token)
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Unable to send reset email. Please try again later.",
+            # Log the failure server-side but return the same generic 200 to
+            # prevent user enumeration.
+            import logging
+            logging.getLogger(__name__).error(
+                "Failed to send reset email to %s", user.email
             )
 
     return {"message": "If that email is registered, a reset link has been sent."}

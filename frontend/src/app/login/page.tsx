@@ -2,7 +2,7 @@
 
 import { useState, FormEvent, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { loginApi, resendVerificationApi } from "@/lib/authApi";
+import { loginApi, resendVerificationApi, ApiError } from "@/lib/authApi";
 import { useAuth } from "@/components/AuthProvider";
 import Link from "next/link";
 
@@ -46,10 +46,18 @@ export default function LoginPage() {
       login(res.access_token);
       router.replace("/projects");
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Login failed.";
-      if (message.toLowerCase().includes("not verified")) {
-        setUnverified(true);
+      let message = "Login failed.";
+      let isUnverified = false;
+
+      if (err instanceof ApiError) {
+        message = err.message;
+        isUnverified =
+          err.status === 403 || err.code === "EMAIL_NOT_VERIFIED";
+      } else if (err instanceof Error) {
+        message = err.message;
       }
+
+      setUnverified(isUnverified);
       setError(message);
     } finally {
       setLoading(false);

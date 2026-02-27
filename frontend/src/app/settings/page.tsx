@@ -9,7 +9,7 @@ import { deleteAccount } from "@/lib/authApi";
 
 export default function SettingsPage() {
     const router = useRouter();
-    const { token, isAuthenticated, logout } = useAuth();
+    const { token, hydrated, isAuthenticated, logout } = useAuth();
 
     // Delete account modal state
     const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -19,12 +19,12 @@ export default function SettingsPage() {
 
     // Redirect if not authenticated
     useEffect(() => {
-        if (!token && !isAuthenticated) {
+        if (hydrated && !token && !isAuthenticated) {
             router.replace("/login");
         }
-    }, [token, isAuthenticated, router]);
+    }, [hydrated, token, isAuthenticated, router]);
 
-    if (!token && !isAuthenticated) {
+    if (!hydrated || (!token && !isAuthenticated)) {
         return (
             <div className="flex min-h-screen items-center justify-center bg-[#0f172a] text-sm text-slate-400">
                 Redirecting to login...

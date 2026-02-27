@@ -41,11 +41,12 @@ Create a `.env` file in this directory (or set via Docker Compose):
 | `S3_SECURE` | No | `true` | Use HTTPS for S3 (`false` for local MinIO) |
 | `S3_BUCKET` | No | `blender-vcs-prod` | S3 bucket name (`capstonebots` for local MinIO) |
 | `S3_REGION` | No | `us-east-1` | S3 region |
-| `SMTP_HOST` | No | — | SMTP server (omit to print links to console) |
+| `SMTP_HOST` | No | — | SMTP server (required for email delivery; see `EMAIL_DEBUG`) |
 | `SMTP_PORT` | No | `587` | SMTP port |
 | `SMTP_USER` | No | — | SMTP login |
 | `SMTP_PASSWORD` | No | — | SMTP password |
 | `SMTP_FROM` | No | `SMTP_USER` | From address for outgoing emails |
+| `EMAIL_DEBUG` | No | `false` | Print verification/reset links to console when SMTP is not configured (local dev only) |
 | `FRONTEND_URL` | No | `http://localhost:3000` | Base URL used in email links |
 | `INVITE_EXPIRY_DAYS` | No | `7` | Days before project invitations expire |
 

@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/set-state-in-effect */
 "use client";
 
 import React, { createContext, useContext, useState, useEffect } from "react";
@@ -25,6 +24,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const saved = localStorage.getItem("auth_token");
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (saved) setToken(saved);
     setHydrated(true);
   }, []);

@@ -14,7 +14,7 @@ import {
 
 export default function ProjectsPage() {
   const router = useRouter();
-  const { token, isAuthenticated, logout } = useAuth();
+  const { token, hydrated, isAuthenticated, logout } = useAuth();
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,6 +30,7 @@ export default function ProjectsPage() {
 
   // If not authenticated, send to /login
   useEffect(() => {
+    if (!hydrated) return;
     if (!token) {
       if (!isAuthenticated) {
         router.replace("/login");
@@ -54,9 +55,9 @@ export default function ProjectsPage() {
       } catch { }
     })();
 
-  }, [token, isAuthenticated, router]);
+  }, [hydrated, token, isAuthenticated, router]);
 
-  if (!token && !isAuthenticated) {
+  if (!hydrated || (!token && !isAuthenticated)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#0f172a] text-sm text-slate-400">
         Redirecting to login...
