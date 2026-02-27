@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, text as sa_text
 from sqlalchemy.orm import joinedload
 
 from database import get_db
