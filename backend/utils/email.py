@@ -79,5 +79,5 @@ def send_password_reset_email(to_email: str, reset_token: str) -> None:
         logger.info("Password-reset email sent to %s", to_email)
     except Exception as e:
         logger.error("Failed to send reset email to %s: %s", to_email, e)
-        # Don't re-raise – caller should still return a generic success to the client
+        raise
 

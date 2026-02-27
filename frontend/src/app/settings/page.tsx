@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useState, useEffect, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
@@ -17,10 +17,13 @@ export default function SettingsPage() {
     const [deleteError, setDeleteError] = useState("");
 
     // Redirect if not authenticated
-    if (!token && !isAuthenticated) {
-        if (typeof window !== "undefined") {
+    useEffect(() => {
+        if (!token && !isAuthenticated) {
             router.replace("/login");
         }
+    }, [token, isAuthenticated, router]);
+
+    if (!token && !isAuthenticated) {
         return (
             <div className="flex min-h-screen items-center justify-center bg-[#0f172a] text-sm text-slate-400">
                 Redirecting to login...
@@ -122,7 +125,7 @@ export default function SettingsPage() {
                             </p>
                         </div>
 
-                        <form onSubmit={handleDeleteAccount} className="space-y-4">
+                        <form onSubmit={handleDeleteAccount} className="space-y-4" suppressHydrationWarning>
                             <div className="text-left">
                                 <label className="mb-1 block text-[11px] font-medium text-slate-300">
                                     Enter your password to confirm
@@ -136,6 +139,7 @@ export default function SettingsPage() {
                                     placeholder="Your current password"
                                     required
                                     autoFocus
+                                    suppressHydrationWarning
                                 />
                             </div>
 

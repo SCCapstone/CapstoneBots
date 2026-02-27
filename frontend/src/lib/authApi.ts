@@ -104,7 +104,7 @@ export async function deleteAccount(token: string, password: string): Promise<vo
     throw new Error(message);
   }
 }
-
+``
 export async function forgotPasswordApi(email: string) {
   const res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
     method: "POST",
@@ -112,7 +112,16 @@ export async function forgotPasswordApi(email: string) {
     body: JSON.stringify({ email }),
   });
   if (!res.ok) {
-    throw new Error("Request failed");
+    let message = "Something went wrong. Please try again.";
+    try {
+      const data = await res.json();
+      if (data?.detail && typeof data.detail === "string") {
+        message = data.detail;
+      }
+    } catch {
+      /* no JSON */
+    }
+    throw new Error(message);
   }
   return res.json();
 }

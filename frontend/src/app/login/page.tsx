@@ -79,6 +79,7 @@ export default function LoginPage() {
         <form
           onSubmit={handleSubmit}
           className="space-y-4 text-left"
+          suppressHydrationWarning
         >
           <div>
             <label className="block text-xs text-slate-300 mb-1">
@@ -113,6 +114,7 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-sky-500"
+              suppressHydrationWarning
             />
           </div>
 

@@ -18,8 +18,12 @@ export default function ForgotPasswordPage() {
     try {
       await forgotPasswordApi(email);
       setSent(true);
-    } catch {
-      setError("Something went wrong. Please try again.");
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("Something went wrong. Please try again.");
+      }
     } finally {
       setLoading(false);
     }

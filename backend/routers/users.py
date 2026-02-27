@@ -151,7 +151,13 @@ async def forgot_password(body: schemas.ForgotPasswordRequest, db: AsyncSession 
 
     if user:
         token = create_password_reset_token(user.email)
-        send_password_reset_email(user.email, token)
+        try:
+            send_password_reset_email(user.email, token)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unable to send reset email. Please try again later.",
+            )
 
     return {"message": "If that email is registered, a reset link has been sent."}
 
@@ -209,7 +215,7 @@ async def reset_password(body: schemas.ResetPasswordRequest, db: AsyncSession = 
 
     # Update password
     user.password_hash = get_password_hash(body.new_password)
-    user.password_changed_at = datetime.now(timezone.utc)
+    user.password_changed_at = datetime.utcnow()
     await db.commit()
 
     return {"message": "Password has been reset successfully."}
