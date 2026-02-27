@@ -1,6 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useState, useEffect, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
@@ -8,7 +9,7 @@ import { deleteAccount } from "@/lib/authApi";
 
 export default function SettingsPage() {
     const router = useRouter();
-    const { token, isAuthenticated, logout } = useAuth();
+    const { token, hydrated, isAuthenticated, logout } = useAuth();
 
     // Delete account modal state
     const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -17,10 +18,13 @@ export default function SettingsPage() {
     const [deleteError, setDeleteError] = useState("");
 
     // Redirect if not authenticated
-    if (!token && !isAuthenticated) {
-        if (typeof window !== "undefined") {
+    useEffect(() => {
+        if (hydrated && !token && !isAuthenticated) {
             router.replace("/login");
         }
+    }, [hydrated, token, isAuthenticated, router]);
+
+    if (!hydrated || (!token && !isAuthenticated)) {
         return (
             <div className="flex min-h-screen items-center justify-center bg-[#0f172a] text-sm text-slate-400">
                 Redirecting to login...
@@ -122,7 +126,7 @@ export default function SettingsPage() {
                             </p>
                         </div>
 
-                        <form onSubmit={handleDeleteAccount} className="space-y-4">
+                        <form onSubmit={handleDeleteAccount} className="space-y-4" suppressHydrationWarning>
                             <div className="text-left">
                                 <label className="mb-1 block text-[11px] font-medium text-slate-300">
                                     Enter your password to confirm
@@ -136,6 +140,7 @@ export default function SettingsPage() {
                                     placeholder="Your current password"
                                     required
                                     autoFocus
+                                    suppressHydrationWarning
                                 />
                             </div>
 

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import Link from "next/link";
@@ -17,7 +18,7 @@ export default function SignupPage() {
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
+  const [success, setSuccess] = useState(false);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -43,7 +44,7 @@ export default function SignupPage() {
         password,
       });
 
-      router.replace("/login");
+      setSuccess(true);
     } catch (err: any) {
       setError(err?.message || "Failed to create account.");
     } finally {
@@ -78,14 +79,27 @@ export default function SignupPage() {
         {error && (
           <p className="mb-3 text-xs text-red-400">{error}</p>
         )}
-        {info && (
-          <p className="mb-3 text-xs text-emerald-400">{info}</p>
-        )}
 
-        {/* Form */}
-        <form
+        {success ? (
+          <div className="space-y-4">
+            <div className="rounded-lg border border-emerald-800 bg-emerald-900/30 p-4 text-sm text-emerald-200">
+              Account created! Please check your email for a verification link
+              to activate your account.
+            </div>
+            <Link
+              href="/login"
+              className="inline-block rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 transition"
+            >
+              Go to Login
+            </Link>
+          </div>
+        ) : (
+          <>
+            {/* Form */}
+            <form
           onSubmit={handleSubmit}
           className="space-y-4 text-left"
+          suppressHydrationWarning
         >
           <div>
             <label className="mb-1 block text-xs text-slate-300">
@@ -126,6 +140,7 @@ export default function SignupPage() {
               onChange={(e) => setPassword(e.target.value)}
               className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-sky-500"
               required
+              suppressHydrationWarning
             />
 
             {/* Requirement Text */}
@@ -149,6 +164,7 @@ export default function SignupPage() {
               onChange={(e) => setConfirm(e.target.value)}
               className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-sky-500"
               required
+              suppressHydrationWarning
             />
           </div>
 
@@ -170,6 +186,8 @@ export default function SignupPage() {
             Log in
           </a>
         </p>
+          </>
+        )}
       </div>
     </div>
   );

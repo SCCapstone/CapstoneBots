@@ -13,7 +13,7 @@ import {
 
 export default function InvitationsPage() {
     const router = useRouter();
-    const { token, isAuthenticated } = useAuth();
+    const { token, hydrated, isAuthenticated } = useAuth();
 
     const [invitations, setInvitations] = useState<Invitation[]>([]);
     const [loading, setLoading] = useState(true);
@@ -21,6 +21,7 @@ export default function InvitationsPage() {
     const [actionLoading, setActionLoading] = useState<string | null>(null);
 
     useEffect(() => {
+        if (!hydrated) return;
         if (!token) {
             if (!isAuthenticated) router.replace("/login");
             return;
@@ -38,7 +39,7 @@ export default function InvitationsPage() {
                 setLoading(false);
             }
         })();
-    }, [token, isAuthenticated, router]);
+    }, [hydrated, token, isAuthenticated, router]);
 
     const handleAccept = async (invitationId: string) => {
         if (!token) return;
@@ -81,7 +82,7 @@ export default function InvitationsPage() {
         return ROLE_COLORS[role] || ROLE_COLORS.viewer;
     };
 
-    if (!token && !isAuthenticated) {
+    if (!hydrated || (!token && !isAuthenticated)) {
         return (
             <div className="flex min-h-screen items-center justify-center bg-[#0f172a] text-sm text-slate-400">
                 Redirecting to login...

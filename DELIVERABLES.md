@@ -1,5 +1,7 @@
 # Storage & Versioning System - Complete Deliverables
 
+> **Internal project tracking document** — not end-user documentation. For user-facing docs, see [README.md](./README.md).
+
 ## 📋 Executive Summary
 
 A production-ready file routing and object storage system for CapstoneBots has been implemented. The system enables efficient version control for Blender projects using MinIO object storage with content deduplication, hierarchical organization, and comprehensive version history tracking.
@@ -76,24 +78,10 @@ Complete system documentation covering:
 - Troubleshooting section
 - Future enhancements
 
-#### 2. **IMPLEMENTATION_SUMMARY.md** (~380 lines)
-High-level overview including:
-- What was implemented
-- Architecture components
-- Storage hierarchy
-- Key features
-- Data flow examples
-- Integration points
-- Configuration
-- Files changed/created
-- Documentation provided
-- Performance characteristics
-- Testing strategy
-- Security features
-- Next steps for production
+#### 2. ~~**IMPLEMENTATION_SUMMARY.md**~~ *(Removed — content merged into DELIVERABLES.md)*
 
-#### 3. **ARCHITECTURE_DIAGRAMS.md** (~365 lines)
-Visual representations of:
+
+
 - Component relationships
 - Create commit data flow
 - Download commit data flow
@@ -155,7 +143,7 @@ Comprehensive test suite:
 4. ✅ `backend/storage/examples.py`
 5. ✅ `backend/tests/test_storage.py`
 6. ✅ `STORAGE.md`
-7. ✅ `IMPLEMENTATION_SUMMARY.md`
+7. ~~`IMPLEMENTATION_SUMMARY.md`~~ *(removed)*
 8. ✅ `ARCHITECTURE_DIAGRAMS.md`
 9. ✅ `backend/INTEGRATION_GUIDE.md`
 10. ✅ `backend/storage/QUICK_REFERENCE.md`
@@ -245,7 +233,6 @@ Comprehensive test suite:
 | INTEGRATION_GUIDE.md | 400+ | Integration steps |
 | ARCHITECTURE_DIAGRAMS.md | 365 | Visual docs |
 | QUICK_REFERENCE.md | 300 | Cheat sheet |
-| IMPLEMENTATION_SUMMARY.md | 380 | Overview |
 | examples.py | 400 | Code examples |
 | test_storage.py | 350 | Tests |
 
@@ -277,23 +264,26 @@ Comprehensive test suite:
 
 ## 📋 Configuration
 
-### Environment Variables Required
+### Environment Variables (AWS S3 — Production)
 ```bash
-S3_ENDPOINT=localhost:9000         # MinIO/S3 endpoint
-S3_ACCESS_KEY=minioadmin           # Access key
-S3_SECRET_KEY=minioadmin           # Secret key
-S3_SECURE=false                    # Use HTTPS
-S3_REGION=us-east-1                # Region
-S3_BUCKET=capstonebots             # Bucket name
+S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
+S3_ACCESS_KEY=<your-aws-access-key>
+S3_SECRET_KEY=<your-aws-secret-key>
+S3_SECURE=true
+S3_REGION=us-east-1
+S3_BUCKET=blender-vcs-prod
 ```
 
-### Optional Environment Variables
+### Environment Variables (MinIO — Local Development)
 ```bash
-S3_SECURE=true                     # For HTTPS connections
-S3_REGION=custom-region            # Custom region if needed
+S3_ENDPOINT=http://minio:9000
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin
+S3_SECURE=false
+S3_REGION=us-east-1
+S3_BUCKET=capstonebots
 ```
 
----
 
 ## ✅ Quality Assurance
 
@@ -412,6 +402,6 @@ A complete, production-ready storage and versioning system has been implemented 
 
 ---
 
-**Implementation Date**: December 4, 2025  
+**Implementation Date**: February 2026  
 **Branch**: 84-deploy-miniio-storage-online  
 **Total Time**: Comprehensive implementation from analysis to production-ready code

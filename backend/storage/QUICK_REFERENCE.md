@@ -278,4 +278,4 @@ S3_BUCKET=capstonebots             # Bucket name
 
 ---
 
-**Last Updated**: December 2025
+**Last Updated**: February 2026

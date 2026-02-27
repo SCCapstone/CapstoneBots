@@ -1,36 +1,85 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Blender Collab — Frontend
 
-## Getting Started
+Next.js web application for the Blender Collab project. Provides the user interface for authentication, project management, collaboration, and file browsing.
 
-First, run the development server:
+## Tech Stack
+
+- **Framework**: Next.js 16 (App Router)
+- **UI**: React 19, Tailwind CSS 4
+- **Language**: TypeScript
+- **Auth**: JWT tokens stored in localStorage via `AuthProvider` context
+
+## Pages
+
+| Route | Description |
+|-------|-------------|
+| `/` | Landing page |
+| `/login` | Log in with email and password |
+| `/signup` | Create a new account |
+| `/verify-email?token=...` | Email verification (from signup email link) |
+| `/login/forgot-password` | Request a password reset email |
+| `/login/reset-password?token=...` | Set a new password (from reset email link) |
+| `/projects` | Projects dashboard — list, create, manage projects |
+| `/projects/[projectId]` | Project detail — commits, branches, files, members |
+| `/invitations` | View and respond to project invitations |
+| `/settings` | Account settings and account deletion |
+
+## Setup
+
+### Prerequisites
+
+- Node.js 20+
+- npm
+
+### Install and run
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Environment Variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Create a `.env` file in this directory:
 
-## Learn More
+```env
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+```
 
-To learn more about Next.js, take a look at the following resources:
+When running via Docker Compose, this is set automatically to `http://backend:8000`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Project Structure
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+src/
+├── app/                          # Next.js App Router pages
+│   ├── layout.tsx                # Root layout with AuthProvider
+│   ├── page.tsx                  # Landing page
+│   ├── globals.css               # Global styles
+│   ├── login/
+│   │   ├── page.tsx              # Login page
+│   │   ├── forgot-password/      # Forgot password page
+│   │   └── reset-password/       # Reset password page
+│   ├── signup/                   # Signup page
+│   ├── verify-email/             # Email verification page
+│   ├── projects/
+│   │   ├── page.tsx              # Projects dashboard
+│   │   └── [projectId]/          # Project detail page
+│   ├── invitations/              # Invitations page
+│   └── settings/                 # Account settings page
+├── components/
+│   └── AuthProvider.tsx          # JWT auth context provider
+└── lib/
+    ├── authApi.ts                # Auth API client (login, signup, verify, reset, etc.)
+    └── projectsApi.ts            # Projects API client (CRUD, invitations, files)
+```
 
-## Deploy on Vercel
+## Deployment
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+For production deployment to Vercel, see the [Deployment Guide](../DEPLOYMENT.md).
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+**Last Updated**: February 2026
