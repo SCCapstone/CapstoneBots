@@ -40,6 +40,7 @@ from schemas import (
 )
 from utils.auth import get_current_user
 from utils.permissions import check_project_access, is_project_member, get_user_projects
+from utils.project_utils import delete_project_data
 
 # Initialize the router for project-related endpoints
 router = APIRouter()
@@ -267,31 +268,7 @@ async def delete_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Delete S3 objects linked to this project's blender_objects
-    from utils.s3_cleanup import cleanup_project_s3
-    pid = str(project_id)
-    await cleanup_project_s3(db, project_id)
-
-    # Use raw SQL to avoid ORM circular dependency between Branch ↔ Commit
-    await db.execute(sa_text("UPDATE branches SET head_commit_id = NULL WHERE project_id = :pid"), {"pid": pid})
-    await db.execute(sa_text("UPDATE commits SET parent_commit_id = NULL WHERE project_id = :pid"), {"pid": pid})
-    await db.execute(sa_text(
-        "UPDATE blender_objects SET parent_object_id = NULL "
-        "WHERE commit_id IN (SELECT commit_id FROM commits WHERE project_id = :pid)"
-    ), {"pid": pid})
-    await db.execute(sa_text(
-        "DELETE FROM blender_objects "
-        "WHERE commit_id IN (SELECT commit_id FROM commits WHERE project_id = :pid)"
-    ), {"pid": pid})
-
-    for tbl in [
-        "object_locks", "merge_conflicts",
-        "commits", "branches", "project_metadata",
-        "project_invitations", "project_members",
-    ]:
-        await db.execute(sa_text(f"DELETE FROM {tbl} WHERE project_id = :pid"), {"pid": pid})
-
-    await db.execute(sa_text("DELETE FROM projects WHERE project_id = :pid"), {"pid": pid})
+    await delete_project_data(db, project_id)
     await db.commit()
 
 # ============== Branch Routes ==============

@@ -20,6 +20,7 @@ from database import get_db
 from models import User, Project, ProjectMember, ProjectInvitation, ObjectLock, Commit, Branch, MemberRole, InvitationStatus
 import schemas
 from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user
+from utils.project_utils import delete_project_data
 
 # Initialize the router for authentication endpoints
 router = APIRouter()
@@ -216,46 +217,9 @@ async def delete_account(
         other_member_count = member_count_result.scalar()
 
         if other_member_count == 0:
-            # Sole member → delete entire project manually to avoid
-            # ORM circular-dependency between Branch ↔ Commit.
-            pid = project.project_id
-
-            # Delete S3 objects linked to this project's blender_objects
-            from utils.s3_cleanup import cleanup_project_s3
-            await cleanup_project_s3(db, pid)
-
-            # Break circular FKs first
-            await db.execute(sa_text(
-                "UPDATE branches SET head_commit_id = NULL WHERE project_id = :pid"
-            ), {"pid": str(pid)})
-            await db.execute(sa_text(
-                "UPDATE commits SET parent_commit_id = NULL WHERE project_id = :pid"
-            ), {"pid": str(pid)})
-
-            # blender_objects links via commit_id (not project_id) and has self-ref parent_object_id
-            await db.execute(sa_text(
-                "UPDATE blender_objects SET parent_object_id = NULL "
-                "WHERE commit_id IN (SELECT commit_id FROM commits WHERE project_id = :pid)"
-            ), {"pid": str(pid)})
-            await db.execute(sa_text(
-                "DELETE FROM blender_objects "
-                "WHERE commit_id IN (SELECT commit_id FROM commits WHERE project_id = :pid)"
-            ), {"pid": str(pid)})
-
-            # Delete remaining child tables that DO have project_id
-            for tbl in [
-                "object_locks", "merge_conflicts",
-                "commits", "branches", "project_metadata",
-                "project_invitations", "project_members",
-            ]:
-                await db.execute(sa_text(
-                    f"DELETE FROM {tbl} WHERE project_id = :pid"
-                ), {"pid": str(pid)})
-
-            # Delete the project itself
-            await db.execute(sa_text(
-                "DELETE FROM projects WHERE project_id = :pid"
-            ), {"pid": str(pid)})
+            # Sole member → delete entire project using the shared helper
+            # to avoid ORM circular-dependency between Branch ↔ Commit.
+            await delete_project_data(db, project.project_id)
 
             # Expunge the ORM object so SQLAlchemy doesn't try to flush it
             await db.execute(sa_text("SELECT 1"))  # sync the session
