@@ -10,6 +10,8 @@ Endpoints:
     GET /me - Get current authenticated user information
 """
 
+import os
+
 from fastapi import APIRouter, HTTPException, status, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -640,4 +642,35 @@ async def decline_invitation(
     await db.commit()
 
     return {"status": "declined", "invitation_id": str(invitation.invitation_id)}
+
+
+@router.get("/s3-config")
+async def get_s3_config(current_user: User = Depends(get_current_user)):
+    """
+    Return S3/MinIO storage configuration to authenticated users.
+    The Blender add-on calls this after login so the user never has to
+    manually enter S3 keys in the add-on preferences.
+    """
+    endpoint = os.environ.get("S3_ENDPOINT", "")
+    access_key = os.environ.get("S3_ACCESS_KEY", "")
+    secret_key = os.environ.get("S3_SECRET_KEY", "")
+    bucket = os.environ.get("S3_BUCKET", "blender-vcs-prod")
+    region = os.environ.get("S3_REGION", "us-east-1")
+    secure = os.environ.get("S3_SECURE", "true").lower() == "true"
+
+    if not access_key or not secret_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="S3 storage is not configured on the server.",
+        )
+
+    return {
+        "access_key": access_key,
+        "secret_key": secret_key,
+        "bucket": bucket,
+        "endpoint": endpoint,
+        "region": region,
+        "secure": secure,
+    }
+
 

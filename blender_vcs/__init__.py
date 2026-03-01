@@ -170,13 +170,19 @@ class BVCSAddonPreferences(bpy.types.AddonPreferences):
         layout.prop(self, "project_id")
 
         layout.separator()
-        layout.label(text="S3 Configuration (optional)")
-        layout.prop(self, "s3_access_key")
-        layout.prop(self, "s3_secret_key")
-        layout.prop(self, "s3_bucket")
-        layout.prop(self, "s3_endpoint")
-        layout.prop(self, "s3_region")
-        layout.prop(self, "s3_secure")
+        layout.label(text="S3 Configuration (auto-fetched on login)")
+        has_s3 = bool(self.s3_access_key and self.s3_secret_key and self.s3_bucket)
+        if has_s3:
+            layout.label(text="✓ S3 credentials configured", icon='CHECKMARK')
+        else:
+            layout.label(text="S3 credentials will be fetched when you log in", icon='INFO')
+        box = layout.box()
+        box.prop(self, "s3_access_key")
+        box.prop(self, "s3_secret_key")
+        box.prop(self, "s3_bucket")
+        box.prop(self, "s3_endpoint")
+        box.prop(self, "s3_region")
+        box.prop(self, "s3_secure")
         row = layout.row()
         row.operator("bvcs.test_s3", text="Test S3 Connection")
         row.operator("bvcs.refresh_s3", text="Refresh S3 Credentials")
@@ -224,9 +230,12 @@ def get_logged_in_user(prefs):
 
 def fetch_user_s3_credentials(prefs):
     """Fetch S3 credentials from backend for the current user and fill in preferences."""
+    if not getattr(prefs, "auth_token", None):
+        logger.warning("Cannot fetch S3 config: not logged in")
+        return
     headers = {"Authorization": f"Bearer {prefs.auth_token}"}
     try:
-        resp = requests.get(f"{prefs.api_url}/api/user/s3", headers=headers, timeout=5)
+        resp = requests.get(f"{prefs.api_url}/api/auth/s3-config", headers=headers, timeout=5)
         resp.raise_for_status()
         s3_data = resp.json()
         prefs.s3_access_key = s3_data.get("access_key", "")
@@ -235,9 +244,9 @@ def fetch_user_s3_credentials(prefs):
         prefs.s3_endpoint = s3_data.get("endpoint", "")
         prefs.s3_region = s3_data.get("region", "us-east-1")
         prefs.s3_secure = s3_data.get("secure", True)
-        logger.info("S3 credentials fetched from backend")
+        logger.info("S3 credentials fetched from backend successfully")
     except Exception as e:
-        logger.warning(f"Failed to fetch S3 credentials: {e}")
+        logger.warning(f"Failed to fetch S3 credentials from backend: {e}")
 
 def make_s3_client(prefs):
     """
