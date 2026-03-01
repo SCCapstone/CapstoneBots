@@ -4,6 +4,7 @@ import sqlalchemy as sa
 from contextlib import asynccontextmanager
 import os
 from dotenv import load_dotenv
+import ssl
 
 load_dotenv()
 
@@ -12,13 +13,29 @@ DATABASE_URL = os.getenv(
     "postgresql+asyncpg://postgres:postgres@localhost:5432/capstonebots"
 )
 
-# Ensure the URL uses asyncpg dialect for async connections
+# Fix the driver name for async
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+# Fix the SSL argument for asyncpg
+# Remove '?sslmode=require' if it exists to prevent the TypeError
+if "?sslmode=" in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.split("?")[0]
+
+# Determine if SSL context should be passed for DigitalOcean databases
+connect_args = {}
+if "ondigitalocean.app" in DATABASE_URL or "db.ondigitalocean.com" in DATABASE_URL:
+    # Create a custom SSL context to handle DO's self-signed certificates
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+
+    connect_args = {"ssl": ssl_context}
 
 # Create async engine with connection pooling
 engine = create_async_engine(
     DATABASE_URL,
+    connect_args=connect_args,
     echo=os.getenv("SQL_ECHO", "False") == "True",
     pool_size=int(os.getenv("DB_POOL_SIZE", 20)),
     max_overflow=int(os.getenv("DB_MAX_OVERFLOW", 10)),
