@@ -84,7 +84,7 @@ export default function SignupPage() {
           <div className="space-y-4">
             <div className="rounded-lg border border-emerald-800 bg-emerald-900/30 p-4 text-sm text-emerald-200">
               Account created! Please check your email for a verification link
-              to activate your account.
+              to activate your account. Make sure to check your spam folder.
             </div>
             <Link
               href="/login"
