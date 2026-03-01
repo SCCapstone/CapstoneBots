@@ -14,6 +14,9 @@ from database import init_db, close_db
 
 load_dotenv()
 
+# Frontend URL
+frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -29,22 +32,28 @@ app = FastAPI(
     title="CapstoneBots API",
     version="1.0.0",
     description="A Blender Collaborative Version Control System API",
-    lifespan=lifespan
+    lifespan=lifespan,
+    root_path="/capstone-deploy-backend"
 )
 
-# CORS middleware configuration
+# Updated CORS middleware configuration
+origins = [
+    "http://localhost:3000",
+    "https://capstone-bots.vercel.app",
+    "https://capstonebots-production.up.railway.app",
+]
+
+# Add the dynamic DigitalOcean URL if it exists
+if frontend_url:
+    origins.append(frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://capstone-bots.vercel.app",
-        "https://capstonebots-production.up.railway.app"
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 @app.get("/api/health")
 async def health_check():
