@@ -99,7 +99,7 @@ def ensure_boto3_installed():
 
 _try_import_boto3()
 
-BL_ID = "blender_vcs" 
+BL_ID = "blender_vcs"
 
 # ---------------- Logger ----------------
 logger = logging.getLogger("BVCS")
@@ -176,13 +176,6 @@ class BVCSAddonPreferences(bpy.types.AddonPreferences):
             layout.label(text="✓ S3 credentials configured", icon='CHECKMARK')
         else:
             layout.label(text="S3 credentials will be fetched when you log in", icon='INFO')
-        box = layout.box()
-        box.prop(self, "s3_access_key")
-        box.prop(self, "s3_secret_key")
-        box.prop(self, "s3_bucket")
-        box.prop(self, "s3_endpoint")
-        box.prop(self, "s3_region")
-        box.prop(self, "s3_secure")
         row = layout.row()
         row.operator("bvcs.test_s3", text="Test S3 Connection")
         row.operator("bvcs.refresh_s3", text="Refresh S3 Credentials")
@@ -250,38 +243,66 @@ def fetch_user_s3_credentials(prefs):
 
 def make_s3_client(prefs):
     """
-    Creates a boto3 S3 client using preferences or environment.
+    Creates a boto3 S3 client using S3 credentials stored in addon preferences.
+    Credentials are fetched from the backend (env vars on the server) at login
+    via the /api/auth/s3-config endpoint.  If they are missing but the user is
+    logged in, this function will attempt to fetch them automatically.
+
     Returns (client_info, error_msg). If client_info is None, error_msg explains why.
     """
-    # prefer prefs values; fallback to env vars
-    access_key = prefs.s3_access_key or os.environ.get("S3_ACCESS_KEY") or os.environ.get("AWS_ACCESS_KEY_ID")
-    secret_key = prefs.s3_secret_key or os.environ.get("S3_SECRET_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY")
-    bucket = prefs.s3_bucket or os.environ.get("S3_BUCKET")
-    endpoint = prefs.s3_endpoint or os.environ.get("S3_ENDPOINT") or None
-    region = prefs.s3_region or os.environ.get("S3_REGION", "us-east-1")
-    secure = prefs.s3_secure
-
     if not HAS_BOTO3:
         ok, install_err = ensure_boto3_installed()
         if not ok:
             return None, install_err
 
+    # If S3 credentials are missing but user is logged in, auto-fetch from backend
+    if not (prefs.s3_access_key and prefs.s3_secret_key and prefs.s3_bucket):
+        if getattr(prefs, "auth_token", None):
+            logger.info("S3 credentials missing in prefs – fetching from backend…")
+            fetch_user_s3_credentials(prefs)
+        else:
+            return None, "Not logged in. Please log in first so S3 credentials can be fetched from the server."
+
+    access_key = prefs.s3_access_key
+    secret_key = prefs.s3_secret_key
+    bucket = prefs.s3_bucket
+    endpoint = prefs.s3_endpoint
+    region = prefs.s3_region or "us-east-1"
+    secure = prefs.s3_secure
+
     if not access_key or not secret_key or not bucket:
-        return None, "S3 credentials or bucket not configured in preferences or environment."
+        return None, (
+            "S3 credentials could not be loaded from the server. "
+            "Make sure S3_ACCESS_KEY, S3_SECRET_KEY and S3_BUCKET are "
+            "configured on the backend."
+        )
+
+    # Normalise endpoint for boto3: must be a full URL or None
+    if endpoint:
+        endpoint = endpoint.strip()
+    if not endpoint:
+        endpoint = None
+    elif not endpoint.startswith("http://") and not endpoint.startswith("https://"):
+        endpoint = ("https://" if secure else "http://") + endpoint
+
+    logger.info(
+        f"Creating S3 client – endpoint={endpoint}, region={region}, "
+        f"bucket={bucket}, secure={secure}"
+    )
 
     try:
         session = boto3.session.Session()
-        # Use botocore Config for signature_version and retries
         botocore_conf = BotocoreConfig(signature_version='s3v4')
         s3_client = session.client(
             service_name='s3',
             region_name=region,
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
-            endpoint_url=endpoint if endpoint else None,
+            endpoint_url=endpoint,
             config=botocore_conf
         )
     except Exception as e:
+        logger.error(f"Failed to create S3 client: {e}", exc_info=True)
         return None, f"Failed to create S3 client: {e}"
 
     return {
@@ -343,7 +364,7 @@ def upload_folder_to_s3(folder, bucket, s3_key, client):
     except Exception as e:
         logger.error(f"Failed to upload folder to S3: {e}")
         return False
-    
+
 def upload_file_to_s3(local_file_path, bucket, s3_key_prefix, client):
     """
     Upload a single file to S3.
@@ -404,6 +425,13 @@ class BVCS_OT_Logout(bpy.types.Operator):
         prefs = get_prefs(context)
         prefs.auth_token = ""
         prefs.project_id = ""
+        # Clear S3 credentials – they are fetched fresh from the backend on login
+        prefs.s3_access_key = ""
+        prefs.s3_secret_key = ""
+        prefs.s3_bucket = ""
+        prefs.s3_endpoint = ""
+        prefs.s3_region = "us-east-1"
+        prefs.s3_secure = True
         wm = get_bvcs_login_state()
         wm["bvcs_logged_in"] = False
         self.report({'INFO'}, "Logged out")
@@ -772,9 +800,9 @@ def _get_latest_remote_blend_file_info(prefs):
         (
             obj for obj in commit_objects
             if isinstance(obj, dict)
-            and obj.get("object_type") == "BLEND_FILE"
-            and isinstance(obj.get("json_data_path"), str)
-            and obj.get("json_data_path").startswith("s3://")
+               and obj.get("object_type") == "BLEND_FILE"
+               and isinstance(obj.get("json_data_path"), str)
+               and obj.get("json_data_path").startswith("s3://")
         ),
         None,
     )
@@ -939,14 +967,14 @@ class BVCS_OT_Commit(bpy.types.Operator):
         if not local_file_path:
             self.report({'ERROR'}, "Please save your blend file first")
             return {'CANCELLED'}
-        
+
         try:
             # Save the file to capture all current changes
             bpy.ops.wm.save_mainfile()
 
             wm = context.window_manager
             base_commit_hash = _get_last_synced_commit_hash(wm)
-            
+
             # Store commit info locally (will be synced to DB when pushed)
             context.window_manager["bvcs_pending_commit"] = {
                 "message": self.commit_message,
@@ -954,15 +982,15 @@ class BVCS_OT_Commit(bpy.types.Operator):
                 "file_path": local_file_path,
                 "base_commit_hash": base_commit_hash,
             }
-            
+
             self.report({'INFO'}, f"Committed locally: {self.commit_message}")
             logger.info(f"Local commit created: {self.commit_message}")
-            
+
         except Exception as e:
             self.report({'ERROR'}, f"Commit failed: {e}")
             logger.error(f"Commit failed: {e}")
             return {'CANCELLED'}
-            
+
         return {'FINISHED'}
 
     def invoke(self, context, event):
@@ -1022,15 +1050,15 @@ class BVCS_OT_Push(bpy.types.Operator):
         prefs = get_prefs(context)
         wm = context.window_manager
         local_file_path = bpy.context.blend_data.filepath
-        
+
         if not local_file_path:
             self.report({'ERROR'}, "Please save your blend file before pushing")
             return {'CANCELLED'}
-        
+
         if not prefs.project_id:
             self.report({'ERROR'}, "No project selected")
             return {'CANCELLED'}
-        
+
         # Get pending commit info
         pending_commit = wm.get("bvcs_pending_commit")
         if not pending_commit:
@@ -1091,7 +1119,7 @@ class BVCS_OT_Push(bpy.types.Operator):
                         "Push blocked: remote changed since your last pull. Pull latest, merge, then recommit before pushing."
                     )
                     return {'CANCELLED'}
-            
+
         s3_info, err = make_s3_client(prefs)
         if err:
             self.report({'ERROR'}, f"S3 error: {err}")
@@ -1100,11 +1128,11 @@ class BVCS_OT_Push(bpy.types.Operator):
 
         client = s3_info["client"]
         bucket = s3_info["bucket"]
-        
+
         # Create a unique folder name based on project_id and timestamp
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         s3_folder_name = f"{prefs.project_id}_{timestamp}"
-        
+
         try:
             # Step 1: Upload only the .blend file to S3
             self.report({'INFO'}, "Uploading .blend to S3...")
@@ -1114,16 +1142,16 @@ class BVCS_OT_Push(bpy.types.Operator):
                 return {'CANCELLED'}
             # Build the s3 path used in DB (s3://bucket/<s3_key>)
             s3_blend_path = f"s3://{bucket}/{s3_key}"
-            
+
             # Step 2: Get current user for author_id
             user = get_logged_in_user(prefs)
             if not user:
                 self.report({'ERROR'}, "Cannot get logged-in user")
                 return {'CANCELLED'}
-            
+
             # Step 3: Get main branch ID
             headers = {"Authorization": f"Bearer {prefs.auth_token}"}
-            branches_resp = requests.get(f"{prefs.api_url}/api/projects/{prefs.project_id}/branches", 
+            branches_resp = requests.get(f"{prefs.api_url}/api/projects/{prefs.project_id}/branches",
                                          headers=headers, timeout=10)
             branches_resp.raise_for_status()
             branches = branches_resp.json()
@@ -1131,11 +1159,11 @@ class BVCS_OT_Push(bpy.types.Operator):
             if not main_branch:
                 self.report({'ERROR'}, "Main branch not found")
                 return {'CANCELLED'}
-            
+
             # Step 4: Build S3 paths for objects
             blend_filename = os.path.basename(local_file_path)
             s3_blend_path = f"s3://{bucket}/{s3_folder_name}/{blend_filename}"
-            
+
             # Create object metadata - one entry for the main .blend file
             objects_data = [{
                 "object_name": blend_filename,
@@ -1145,7 +1173,7 @@ class BVCS_OT_Push(bpy.types.Operator):
                 "parent_object_id": None,
                 "blob_hash": hashlib.sha256(s3_blend_path.encode()).hexdigest()
             }]
-            
+
             # Step 5: Create commit in database
             commit_payload = {
                 "branch_id": main_branch["branch_id"],
@@ -1153,7 +1181,7 @@ class BVCS_OT_Push(bpy.types.Operator):
                 "commit_message": pending_commit["message"],
                 "objects": objects_data
             }
-            
+
             self.report({'INFO'}, "Creating commit in database...")
             commit_resp = requests.post(
                 f"{prefs.api_url}/api/projects/{prefs.project_id}/commits",
@@ -1163,7 +1191,7 @@ class BVCS_OT_Push(bpy.types.Operator):
             )
             commit_resp.raise_for_status()
             commit_data = commit_resp.json()
-            
+
             # Success! Update UI state
             wm["bvcs_last_pushed"] = {
                 "folder": s3_folder_name,
@@ -1177,17 +1205,17 @@ class BVCS_OT_Push(bpy.types.Operator):
                 del wm["bvcs_push_conflict"]
             if "bvcs_push_conflict_compare" in wm:
                 del wm["bvcs_push_conflict_compare"]
-            
+
             # Clear pending commit
             if "bvcs_pending_commit" in wm:
                 del wm["bvcs_pending_commit"]
 
             _refresh_project_blend_file_cache(context, prefs)
             wm.bvcs_project_file = "NONE"
-            
+
             logger.info(f"Pushed to s3://{bucket}/{s3_folder_name} and DB commit {commit_data.get('commit_hash')}")
             self.report({'INFO'}, f"Successfully pushed to S3 and database!")
-                
+
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to create commit in database: {e}")
             self.report({'ERROR'}, f"Database error: {e}")
@@ -1196,7 +1224,7 @@ class BVCS_OT_Push(bpy.types.Operator):
             logger.error(f"Failed to push: {e}")
             self.report({'ERROR'}, f"Push failed: {e}")
             return {'CANCELLED'}
-            
+
         return {'FINISHED'}
 
 class BVCS_OT_PullProject(bpy.types.Operator):
@@ -1297,9 +1325,9 @@ class BVCS_OT_ResolveMergeConflict(bpy.types.Operator):
                 prefs, remote_info, temp_subdir="bvcs_conflict_compare"
             )
             local_path = (
-                conflict.get("local_file_path")
-                or (wm.get("bvcs_pending_commit") or {}).get("file_path")
-                or bpy.context.blend_data.filepath
+                    conflict.get("local_file_path")
+                    or (wm.get("bvcs_pending_commit") or {}).get("file_path")
+                    or bpy.context.blend_data.filepath
             )
 
             wm["bvcs_push_conflict_compare"] = {
@@ -1690,7 +1718,7 @@ class BVCS_PT_Panel(bpy.types.Panel):
             layout.separator()
             layout.label(text="S3 Config:")
             layout.prop(prefs, "s3_bucket", text="Bucket")
-            
+
             # Show pending commit (waiting to be pushed)
             wm = context.window_manager
             if "bvcs_pending_commit" in wm:
@@ -1707,14 +1735,14 @@ class BVCS_PT_Panel(bpy.types.Panel):
                 layout.label(text=f"  Remote: {str(conflict.get('remote_commit_hash', ''))[:8]}...")
                 layout.label(text=f"  Base: {str(conflict.get('base_commit_hash', ''))[:8]}...")
                 layout.operator("bvcs.resolve_merge_conflict", text="Resolve Merge Conflict")
-            
+
             # Show last push info if available
             if "bvcs_last_pushed" in wm:
                 layout.separator()
                 layout.label(text="Last Push:")
                 last_push = wm["bvcs_last_pushed"]
                 layout.label(text=f"  Commit: {last_push.get('commit_hash', 'N/A')[:8]}...", icon='CHECKMARK')
-                
+
             # Show last pull info if available
             if "bvcs_last_pulled" in wm:
                 layout.separator()
