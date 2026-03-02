@@ -57,11 +57,11 @@ async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db))
     # Check if email already exists in database
     email_result = await db.execute(select(User).where(User.email == user.email))
     email_user = email_result.scalars().first()
-    
+
     # Check if username already exists in database
     username_result = await db.execute(select(User).where(User.username == user.username))
     username_user = username_result.scalars().first()
-    
+
     # Provide specific error messages for better user experience
     if email_user and username_user:
         raise HTTPException(status_code=400, detail="Both username and email are already registered")
@@ -72,26 +72,26 @@ async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db))
 
     # Hash the password securely using bcrypt (via utils.auth module)
     hashed_password = get_password_hash(user.password)
-    
+
     # Create new user instance with hashed password
     new_user = User(
         username=user.username,
         email=user.email,
         password_hash=hashed_password
     )
-    
+
     # Add user to database and commit transaction
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)  # Refresh to get generated fields (e.g., user_id, created_at)
-    
+
     # Send verification email (non-blocking: account is created even if email fails)
     try:
         token = create_email_verification_token(new_user.email)
         send_verification_email(new_user.email, token)
     except Exception:
         pass  # Email failure is logged in the email utility; don't block signup
-    
+
     return new_user
 
 
@@ -139,7 +139,7 @@ async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     # Block login for unverified accounts
     if not user.is_verified:
         raise HTTPException(
@@ -149,11 +149,11 @@ async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(
                 "code": "EMAIL_NOT_VERIFIED",
             },
         )
-    
+
     # Generate JWT token with user's email as the subject claim
     # The token can be decoded later to identify the authenticated user
     access_token = create_access_token(data={"sub": user.email})
-    
+
     return {"access_token": access_token, "token_type": "bearer"}
 
 
@@ -340,9 +340,9 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
 
 @router.delete("/account", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_account(
-    body: schemas.DeleteAccountRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+        body: schemas.DeleteAccountRequest,
+        current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
 ):
     """
     Permanently delete the authenticated user's account and handle associated data.
@@ -378,7 +378,7 @@ async def delete_account(
             select(func.count(ProjectMember.member_id)).where(
                 ProjectMember.project_id == project.project_id,
                 ProjectMember.user_id != user_id,
-            )
+                )
         )
         other_member_count = member_count_result.scalar()
 
@@ -400,7 +400,7 @@ async def delete_account(
                 .where(
                     ProjectMember.project_id == project.project_id,
                     ProjectMember.user_id != user_id,
-                )
+                    )
                 .order_by(ProjectMember.added_at)
                 .limit(1)
             )
@@ -416,7 +416,7 @@ async def delete_account(
                 select(ProjectMember).where(
                     ProjectMember.project_id == project.project_id,
                     ProjectMember.user_id == user_id,
-                )
+                    )
             )
             user_membership = user_membership_result.scalars().first()
             if user_membership:
@@ -465,7 +465,7 @@ async def delete_account(
             or_(
                 ProjectInvitation.inviter_id == user_id,
                 ProjectInvitation.invitee_id == user_id,
-            )
+                )
         )
     )
     for invitation in invitations_result.scalars().all():
@@ -493,8 +493,8 @@ async def delete_account(
 
 @router.get("/invitations/pending", response_model=list[schemas.InvitationResponse])
 async def get_pending_invitations(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
 ):
     """List all pending invitations for the current user."""
     from datetime import datetime
@@ -505,7 +505,7 @@ async def get_pending_invitations(
         .where(
             ProjectInvitation.invitee_id == current_user.user_id,
             ProjectInvitation.status == InvitationStatus.pending.value,
-        )
+            )
         .order_by(ProjectInvitation.created_at.desc())
     )
     invitations = result.scalars().all()
@@ -544,9 +544,9 @@ async def get_pending_invitations(
 
 @router.post("/invitations/{invitation_id}/accept", response_model=schemas.ProjectMemberResponse)
 async def accept_invitation(
-    invitation_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+        invitation_id: str,
+        current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
 ):
     """Accept a pending invitation and become a project member."""
     from uuid import UUID as UUIDType
@@ -577,7 +577,7 @@ async def accept_invitation(
         select(ProjectMember).where(
             ProjectMember.project_id == invitation.project_id,
             ProjectMember.user_id == current_user.user_id,
-        )
+            )
     )
     if existing.scalars().first():
         invitation.status = InvitationStatus.accepted.value
@@ -614,9 +614,9 @@ async def accept_invitation(
 
 @router.post("/invitations/{invitation_id}/decline")
 async def decline_invitation(
-    invitation_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+        invitation_id: str,
+        current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
 ):
     """Decline a pending invitation."""
     from uuid import UUID as UUIDType
@@ -651,11 +651,11 @@ async def get_s3_config(current_user: User = Depends(get_current_user)):
     The Blender add-on calls this after login so the user never has to
     manually enter S3 keys in the add-on preferences.
     """
-    endpoint = os.environ.get("S3_ENDPOINT", "")
-    access_key = os.environ.get("S3_ACCESS_KEY", "")
-    secret_key = os.environ.get("S3_SECRET_KEY", "")
-    bucket = os.environ.get("S3_BUCKET", "blender-vcs-prod")
-    region = os.environ.get("S3_REGION", "us-east-1")
+    endpoint = os.environ.get("S3_ENDPOINT", "").strip()
+    access_key = os.environ.get("S3_ACCESS_KEY", "").strip()
+    secret_key = os.environ.get("S3_SECRET_KEY", "").strip()
+    bucket = os.environ.get("S3_BUCKET", "blender-vcs-prod").strip()
+    region = os.environ.get("S3_REGION", "us-east-1").strip()
     secure = os.environ.get("S3_SECURE", "true").lower() == "true"
 
     if not access_key or not secret_key:
@@ -663,6 +663,12 @@ async def get_s3_config(current_user: User = Depends(get_current_user)):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="S3 storage is not configured on the server.",
         )
+
+    # Ensure the endpoint is a full URL so boto3-based clients can use it
+    # directly.  If it is the default AWS S3 endpoint the add-on can also
+    # leave endpoint_url=None; sending it doesn't hurt.
+    if endpoint and not endpoint.startswith("http://") and not endpoint.startswith("https://"):
+        endpoint = ("https://" if secure else "http://") + endpoint
 
     return {
         "access_key": access_key,
