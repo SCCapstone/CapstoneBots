@@ -12,7 +12,7 @@ import os
 import json
 import hashlib
 import io
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, Union
 from datetime import datetime, timedelta
 from uuid import UUID
 from pathlib import Path
@@ -274,7 +274,7 @@ class StorageService:
 
     # ============== Deduplication Methods ==============
 
-    def compute_blob_hash(self, data: Dict[str, Any] | bytes) -> str:
+    def compute_blob_hash(self, data: Union[Dict[str, Any], bytes]) -> str:
         """
         Compute SHA256 hash for deduplication.
         

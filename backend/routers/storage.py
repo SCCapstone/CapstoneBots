@@ -25,14 +25,14 @@ import io
 from minio.error import S3Error
 
 from database import get_db
-from models import Project, Commit, BlenderObject, Branch
+from models import Commit, BlenderObject, User, MemberRole
 from schemas import (
     CommitResponse, BlenderObjectResponse, StorageObjectInfo,
     ProjectStorageStats, VersionHistoryResponse, ObjectDownloadResponse
 )
 from storage.storage_service import StorageService, get_storage_service
 from utils.auth import get_current_user
-from models import User
+from utils.permissions import check_project_access
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -81,12 +81,8 @@ async def upload_blender_object(
         - json_file: metadata.json
         - mesh_file: mesh.bin (optional)
     """
-    # Verify project exists and user has access
-    project = await db.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if project.owner_id != current_user.user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to upload to this project")
+    # Editors and above can upload objects
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
     
     # Read and parse JSON metadata
     json_content = await json_file.read()
@@ -150,15 +146,13 @@ async def download_commit(
         
         Downloads: commit_2025-12-04T10-30-00.json
     """
+    # Verify access (any member can download)
+    await check_project_access(project_id, current_user.user_id, db)
+
     # Verify commit exists and belongs to project
     commit = await db.get(Commit, commit_id)
     if not commit or commit.project_id != project_id:
         raise HTTPException(status_code=404, detail="Commit not found")
-    
-    # Verify user has access to project
-    project = await db.get(Project, project_id)
-    if not project or project.owner_id != current_user.user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to download from this project")
     
     # Retrieve all objects in commit
     result = await db.execute(
@@ -202,8 +196,7 @@ async def download_commit(
             
             commit_data["objects"].append(obj_entry)
         except Exception as e:
-            # Log error but continue with other objects
-            print(f"Error retrieving object {obj.object_id}: {e}")
+            logger.error("Error retrieving object %s: %s", obj.object_id, e)
             continue
     
     # Serialize to JSON bytes
@@ -242,15 +235,13 @@ async def download_object(
     Returns:
         FileResponse: Object JSON data as download
     """
+    # Any member can download objects
+    await check_project_access(project_id, current_user.user_id, db)
+
     # Verify object exists
     obj = await db.get(BlenderObject, object_id)
     if not obj or obj.commit_id != commit_id:
         raise HTTPException(status_code=404, detail="Object not found in commit")
-    
-    # Verify access
-    project = await db.get(Project, project_id)
-    if not project or project.owner_id != current_user.user_id:
-        raise HTTPException(status_code=403, detail="Not authorized")
     
     # Download object data
     try:
@@ -283,11 +274,9 @@ async def get_signed_url(
     It verifies that the user has access to the project and that
     the requested file belongs to the project.
     """
-    # Verify access
-    project = await db.get(Project, project_id)
-    if not project or project.owner_id != current_user.user_id:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    
+    # Any member can generate presigned URLs for project files
+    await check_project_access(project_id, current_user.user_id, db)
+
     # Validate path is provided
     if not path or not path.strip():
         raise HTTPException(status_code=400, detail="File path is required")
@@ -367,11 +356,9 @@ async def get_version_history(
     Returns:
         List[VersionHistoryResponse]: Version history with storage info
     """
-    # Verify access
-    project = await db.get(Project, project_id)
-    if not project or project.owner_id != current_user.user_id:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    
+    # Any member can view version history
+    await check_project_access(project_id, current_user.user_id, db)
+
     # Get commits
     result = await db.execute(
         select(Commit)
@@ -392,7 +379,7 @@ async def get_version_history(
         try:
             if storage.object_exists(snapshot_path):
                 snapshot_size = storage.get_object_size(snapshot_path)
-        except:
+        except Exception:
             pass
         
         history.append(VersionHistoryResponse(
@@ -430,11 +417,9 @@ async def get_storage_stats(
     Returns:
         ProjectStorageStats: Storage breakdown
     """
-    # Verify access
-    project = await db.get(Project, project_id)
-    if not project or project.owner_id != current_user.user_id:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    
+    # Any member can view storage stats
+    await check_project_access(project_id, current_user.user_id, db)
+
     # Calculate storage
     try:
         stats = storage.estimate_project_storage(project_id)
@@ -474,15 +459,13 @@ async def create_snapshot(
     Returns:
         dict: Snapshot storage information
     """
-    # Verify commit exists
+    # Editors and above can upload snapshots
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+
+    # Verify commit exists and belongs to project
     commit = await db.get(Commit, commit_id)
     if not commit or commit.project_id != project_id:
         raise HTTPException(status_code=404, detail="Commit not found")
-    
-    # Verify access
-    project = await db.get(Project, project_id)
-    if not project or project.owner_id != current_user.user_id:
-        raise HTTPException(status_code=403, detail="Not authorized")
     
     # Upload snapshot
     blend_content = await file.read()

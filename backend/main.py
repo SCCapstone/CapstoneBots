@@ -1,8 +1,5 @@
-import sys
 import os
-
-# Add the current directory to sys.path to allow imports from this folder
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,18 +11,24 @@ from database import init_db, close_db
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 # Frontend URL
 frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    await init_db()
-    print("Database initialized successfully")
+    try:
+        await init_db()
+        logger.info("Database initialized successfully")
+    except Exception:
+        logger.exception("Failed to initialize database")
+        raise
     yield
     # Shutdown
     await close_db()
-    print("Database connection closed")
+    logger.info("Database connection closed")
 
 
 app = FastAPI(

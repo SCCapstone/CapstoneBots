@@ -11,18 +11,25 @@ Endpoints:
 """
 
 import os
+import logging
+from datetime import datetime, timezone
+from uuid import UUID as UUIDType
 
 from fastapi import APIRouter, HTTPException, status, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, text as sa_text
+from sqlalchemy import func, text as sa_text, or_
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
+from jose import JWTError
 
 from database import get_db
 from models import User, Project, ProjectMember, ProjectInvitation, ObjectLock, Commit, Branch, MemberRole, InvitationStatus
 import schemas
 from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user, create_password_reset_token, decode_password_reset_token, create_email_verification_token, decode_email_verification_token
 from utils.email import send_password_reset_email, send_verification_email
+
+logger = logging.getLogger(__name__)
 
 # Initialize the router for authentication endpoints
 router = APIRouter()
@@ -162,8 +169,6 @@ async def verify_email(body: schemas.VerifyEmailRequest, db: AsyncSession = Depe
     """
     Verify a user's email address using the token sent during registration.
     """
-    from jose import JWTError
-
     try:
         payload = decode_email_verification_token(body.token)
     except (JWTError, ValueError):
@@ -185,9 +190,8 @@ async def verify_email(body: schemas.VerifyEmailRequest, db: AsyncSession = Depe
     if user.is_verified:
         return {"message": "Email is already verified. You can log in."}
 
-    from datetime import datetime
     user.is_verified = True
-    user.email_verified_at = datetime.utcnow()
+    user.email_verified_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
 
     return {"message": "Email verified successfully! You can now log in."}
@@ -208,13 +212,7 @@ async def resend_verification(body: schemas.ResendVerificationRequest, db: Async
         try:
             send_verification_email(user.email, token)
         except Exception:
-            # Log the failure server-side but return the same generic 200 to
-            # prevent user enumeration (a 502 only for real-and-unverified
-            # accounts would leak account existence).
-            import logging
-            logging.getLogger(__name__).error(
-                "Failed to send verification email to %s", user.email
-            )
+            logger.error("Failed to send verification email to %s", user.email)
 
     return {"message": "If that email is registered and unverified, a verification link has been sent."}
 
@@ -235,12 +233,7 @@ async def forgot_password(body: schemas.ForgotPasswordRequest, db: AsyncSession 
         try:
             send_password_reset_email(user.email, token)
         except Exception:
-            # Log the failure server-side but return the same generic 200 to
-            # prevent user enumeration.
-            import logging
-            logging.getLogger(__name__).error(
-                "Failed to send reset email to %s", user.email
-            )
+            logger.error("Failed to send reset email to %s", user.email)
 
     return {"message": "If that email is registered, a reset link has been sent."}
 
@@ -253,9 +246,6 @@ async def reset_password(body: schemas.ResetPasswordRequest, db: AsyncSession = 
     The token must be a valid, unexpired password-reset JWT.
     Tokens issued before the last password change are rejected (single-use).
     """
-    from datetime import datetime, timezone
-    from jose import JWTError
-
     # Validate new password length
     if len(body.new_password) < 8:
         raise HTTPException(
@@ -298,7 +288,7 @@ async def reset_password(body: schemas.ResetPasswordRequest, db: AsyncSession = 
 
     # Update password
     user.password_hash = get_password_hash(body.new_password)
-    user.password_changed_at = datetime.utcnow()
+    user.password_changed_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
 
     return {"message": "Password has been reset successfully."}
@@ -458,8 +448,6 @@ async def delete_account(
         branch.created_by = None
 
     # 7b. Delete all invitations sent or received by this user
-    from models import ProjectInvitation
-    from sqlalchemy import or_
     invitations_result = await db.execute(
         select(ProjectInvitation).where(
             or_(
@@ -497,40 +485,41 @@ async def get_pending_invitations(
         db: AsyncSession = Depends(get_db),
 ):
     """List all pending invitations for the current user."""
-    from datetime import datetime
-    from sqlalchemy.orm import joinedload
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     result = await db.execute(
         select(ProjectInvitation)
+        .options(
+            joinedload(ProjectInvitation.project),
+            joinedload(ProjectInvitation.inviter),
+            joinedload(ProjectInvitation.invitee),
+        )
         .where(
             ProjectInvitation.invitee_id == current_user.user_id,
             ProjectInvitation.status == InvitationStatus.pending.value,
-            )
+        )
         .order_by(ProjectInvitation.created_at.desc())
     )
-    invitations = result.scalars().all()
+    invitations = result.scalars().unique().all()
 
-    # Build responses with project and inviter info
     response = []
     for inv in invitations:
-        # Auto-expire
-        if inv.expires_at and inv.expires_at < datetime.utcnow():
+        expires = inv.expires_at
+        if expires and expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires and expires < now:
             inv.status = InvitationStatus.expired.value
             continue
-
-        project = await db.get(Project, inv.project_id)
-        inviter = await db.get(User, inv.inviter_id)
-        invitee = await db.get(User, inv.invitee_id) if inv.invitee_id else None
 
         response.append(schemas.InvitationResponse(
             invitation_id=inv.invitation_id,
             project_id=inv.project_id,
-            project_name=project.name if project else None,
+            project_name=inv.project.name if inv.project else None,
             inviter_id=inv.inviter_id,
-            inviter_username=inviter.username if inviter else None,
+            inviter_username=inv.inviter.username if inv.inviter else None,
             invitee_id=inv.invitee_id,
             invitee_email=inv.invitee_email,
-            invitee_username=invitee.username if invitee else None,
+            invitee_username=inv.invitee.username if inv.invitee else None,
             role=inv.role,
             status=inv.status,
             created_at=inv.created_at,
@@ -549,9 +538,6 @@ async def accept_invitation(
         db: AsyncSession = Depends(get_db),
 ):
     """Accept a pending invitation and become a project member."""
-    from uuid import UUID as UUIDType
-    from datetime import datetime
-
     try:
         inv_uuid = UUIDType(invitation_id)
     except ValueError:
@@ -567,7 +553,11 @@ async def accept_invitation(
     if invitation.status != InvitationStatus.pending.value:
         raise HTTPException(status_code=400, detail=f"Invitation is already {invitation.status}.")
 
-    if invitation.expires_at < datetime.utcnow():
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    expires = invitation.expires_at
+    if expires and expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires and expires < now:
         invitation.status = InvitationStatus.expired.value
         await db.commit()
         raise HTTPException(status_code=400, detail="This invitation has expired.")
@@ -577,11 +567,11 @@ async def accept_invitation(
         select(ProjectMember).where(
             ProjectMember.project_id == invitation.project_id,
             ProjectMember.user_id == current_user.user_id,
-            )
+        )
     )
     if existing.scalars().first():
         invitation.status = InvitationStatus.accepted.value
-        invitation.responded_at = datetime.utcnow()
+        invitation.responded_at = now
         await db.commit()
         raise HTTPException(status_code=409, detail="You are already a member of this project.")
 
@@ -595,7 +585,7 @@ async def accept_invitation(
     db.add(new_member)
 
     invitation.status = InvitationStatus.accepted.value
-    invitation.responded_at = datetime.utcnow()
+    invitation.responded_at = now
 
     await db.commit()
     await db.refresh(new_member)
@@ -619,9 +609,6 @@ async def decline_invitation(
         db: AsyncSession = Depends(get_db),
 ):
     """Decline a pending invitation."""
-    from uuid import UUID as UUIDType
-    from datetime import datetime
-
     try:
         inv_uuid = UUIDType(invitation_id)
     except ValueError:
@@ -638,7 +625,7 @@ async def decline_invitation(
         raise HTTPException(status_code=400, detail=f"Invitation is already {invitation.status}.")
 
     invitation.status = InvitationStatus.declined.value
-    invitation.responded_at = datetime.utcnow()
+    invitation.responded_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
 
     return {"status": "declined", "invitation_id": str(invitation.invitation_id)}

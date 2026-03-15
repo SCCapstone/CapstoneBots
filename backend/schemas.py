@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict
 from datetime import datetime
 from uuid import UUID
 
@@ -17,8 +17,7 @@ class UserResponse(UserBase):
     last_login: Optional[datetime]
     is_verified: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -70,8 +69,7 @@ class ProjectResponse(ProjectBase):
     updated_at: datetime
     default_branch: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # ============== Branch Schemas ==============
 class BranchBase(BaseModel):
@@ -91,8 +89,7 @@ class BranchResponse(BranchBase):
     created_at: datetime
     created_by: Optional[UUID]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # ============== Commit Schemas ==============
 class CommitBase(BaseModel):
@@ -113,8 +110,7 @@ class CommitResponse(CommitBase):
     merge_commit: bool
     merge_parent_id: Optional[UUID]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # ============== Blender Object Schemas ==============
 class BlenderObjectBase(BaseModel):
@@ -133,8 +129,7 @@ class BlenderObjectResponse(BlenderObjectBase):
     commit_id: UUID
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Request model for creating a commit (includes objects)
 class CommitCreateRequest(BaseModel):
@@ -160,8 +155,7 @@ class ObjectLockResponse(ObjectLockBase):
     locked_at: datetime
     expires_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # ============== Merge Conflict Schemas ==============
 class MergeConflictBase(BaseModel):
@@ -176,8 +170,7 @@ class MergeConflictResponse(MergeConflictBase):
     resolved: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # ============== Project Metadata Schemas ==============
 class ProjectMetadataBase(BaseModel):
@@ -189,8 +182,7 @@ class ProjectMetadataResponse(ProjectMetadataBase):
     project_id: UUID
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ============== Storage & Versioning Schemas ==============
@@ -273,8 +265,7 @@ class ProjectMemberResponse(BaseModel):
     added_at: datetime
     added_by: Optional[UUID]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ProjectMemberRemove(BaseModel):
     """Schema for removing a member from a project"""
@@ -284,14 +275,13 @@ class MemberRoleUpdate(BaseModel):
     """Schema for changing a member's role"""
     role: str  # viewer / editor / owner
 
-class InvitationCreate(BaseModel):
+class InvitationCreate(ProjectMemberAdd):
     """
     Schema for creating a project invitation.
     Provide either email or username (at least one required).
+    Inherits from ProjectMemberAdd — identical fields, separate type for clarity.
     """
-    email: Optional[EmailStr] = None
-    username: Optional[str] = None
-    role: str = "editor"  # viewer / editor / owner
+    pass
 
 class InvitationResponse(BaseModel):
     """Response containing invitation details"""
@@ -309,8 +299,7 @@ class InvitationResponse(BaseModel):
     expires_at: datetime
     responded_at: Optional[datetime]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ProjectWithMembersResponse(ProjectResponse):
     """Extended project response that includes member list"""
@@ -318,7 +307,6 @@ class ProjectWithMembersResponse(ProjectResponse):
     is_owner: bool
     current_user_role: Optional[str]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 

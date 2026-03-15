@@ -3,9 +3,19 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 from database import Base
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import enum
 import os
+
+
+def _utcnow() -> datetime:
+    """Return current UTC time as a naive datetime (UTC, no tzinfo).
+
+    Columns are TIMESTAMP WITHOUT TIME ZONE so asyncpg requires naive datetimes.
+    Using datetime.now(timezone.utc).replace(tzinfo=None) instead of the
+    deprecated datetime.utcnow().
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # ============== Role & Status Enums ==============
@@ -39,7 +49,7 @@ class User(Base):
     username = Column(String, unique=True, nullable=False, index=True)
     email = Column(String, unique=True, nullable=False, index=True)
     password_hash = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
     last_login = Column(DateTime, nullable=True)
     password_changed_at = Column(DateTime, nullable=True)
     is_verified = Column(Boolean, default=False, server_default="false")
@@ -60,8 +70,8 @@ class Project(Base):
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
     default_branch = Column(String, default="main")
     active = Column(Boolean, default=True)
 
@@ -83,7 +93,7 @@ class Branch(Base):
     branch_name = Column(String, nullable=False)
     head_commit_id = Column(UUID(as_uuid=True), ForeignKey("commits.commit_id"), nullable=True)
     parent_branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
 
     __table_args__ = (UniqueConstraint("project_id", "branch_name", name="unique_project_branch"),)
@@ -104,7 +114,7 @@ class Commit(Base):
     author_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
     commit_message = Column(Text, nullable=False)
     commit_hash = Column(String, unique=True, nullable=False, index=True)
-    committed_at = Column(DateTime, default=datetime.utcnow)
+    committed_at = Column(DateTime, default=_utcnow)
     merge_commit = Column(Boolean, default=False)
     merge_parent_id = Column(UUID(as_uuid=True), ForeignKey("commits.commit_id"), nullable=True)
 
@@ -126,7 +136,7 @@ class BlenderObject(Base):
     mesh_data_path = Column(String, nullable=True)
     parent_object_id = Column(UUID(as_uuid=True), ForeignKey("blender_objects.object_id"), nullable=True)
     blob_hash = Column(String, nullable=False, index=True)  # For deduplication
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     commit = relationship("Commit", back_populates="objects")
 
@@ -139,7 +149,7 @@ class ObjectLock(Base):
     object_name = Column(String, nullable=False)
     locked_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
     branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=False)
-    locked_at = Column(DateTime, default=datetime.utcnow)
+    locked_at = Column(DateTime, default=_utcnow)
     expires_at = Column(DateTime, nullable=False)
 
     __table_args__ = (UniqueConstraint("project_id", "object_name", "branch_id", name="unique_object_lock"),)
@@ -158,7 +168,7 @@ class MergeConflict(Base):
     object_name = Column(String, nullable=False)
     conflict_type = Column(String, nullable=False)  # MODIFY_MODIFY, DELETE_MODIFY, etc.
     resolved = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     project = relationship("Project", back_populates="conflicts")
 
@@ -169,7 +179,7 @@ class ProjectMetadata(Base):
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), nullable=False)
     key = Column(String, nullable=False)
     value = Column(String, nullable=True)  # Store as JSON string
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (UniqueConstraint("project_id", "key", name="unique_project_metadata"),)
 
@@ -189,7 +199,7 @@ class ProjectMember(Base):
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     role = Column(String, default=MemberRole.editor.value, nullable=False)  # viewer / editor / owner
-    added_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    added_at = Column(DateTime, default=_utcnow, nullable=False)
     added_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
 
     __table_args__ = (
@@ -219,7 +229,7 @@ class ProjectInvitation(Base):
     invitee_email = Column(String, nullable=False)  # always stored for display
     role = Column(String, default=MemberRole.editor.value, nullable=False)
     status = Column(String, default=InvitationStatus.pending.value, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False)
     responded_at = Column(DateTime, nullable=True)
 
