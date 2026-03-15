@@ -24,8 +24,7 @@ backend/
 │   └── s3_cleanup.py    # S3 object cleanup on project/account deletion
 ├── storage/
 │   ├── storage_service.py  # High-level S3 operations (upload, download, list, delete)
-│   ├── storage_utils.py    # SHA-256 hashing, deduplication logic
-│   ├── minio_client.py     # MinIO/S3 client factory
+│   ├── storage_utils.py    # SHA-256 hashing, path helpers
 │   └── examples.py         # Usage examples
 ├── migrations/          # Alembic migrations
 └── tests/               # pytest test suite

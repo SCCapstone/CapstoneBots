@@ -9,8 +9,13 @@ import os
 
 
 def _utcnow() -> datetime:
-    """Return current UTC time as a timezone-aware datetime."""
-    return datetime.now(timezone.utc)
+    """Return current UTC time as a naive datetime (UTC, no tzinfo).
+
+    Columns are TIMESTAMP WITHOUT TIME ZONE so asyncpg requires naive datetimes.
+    Using datetime.now(timezone.utc).replace(tzinfo=None) instead of the
+    deprecated datetime.utcnow().
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # ============== Role & Status Enums ==============

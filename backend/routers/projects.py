@@ -357,7 +357,7 @@ async def create_commit(
     if not branch or branch.project_id != project_id:
         raise HTTPException(status_code=404, detail="Branch not found")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Enforce object locks
     for obj_data in data.objects:
@@ -679,7 +679,7 @@ async def send_invitation(
         invitee_email=invitee_email,
         role=data.role,
         status=InvitationStatus.pending.value,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=INVITE_EXPIRY_DAYS),
+        expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=INVITE_EXPIRY_DAYS),
     )
     db.add(invitation)
     await db.commit()
@@ -820,7 +820,7 @@ async def add_project_member(
         invitee_email=user_to_add.email,
         role=role,
         status=InvitationStatus.pending.value,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=INVITE_EXPIRY_DAYS),
+        expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=INVITE_EXPIRY_DAYS),
     )
     db.add(invitation)
     await db.commit()

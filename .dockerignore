@@ -1,4 +1,6 @@
 node_modules
+CLAUDE.md
+.claude
 npm-debug.log
 .git
 .gitignore
@@ -12,3 +14,5 @@ __pycache__
 .pytest_cache
 .venv
 venv
+export
+blender_vcs

@@ -191,7 +191,7 @@ async def verify_email(body: schemas.VerifyEmailRequest, db: AsyncSession = Depe
         return {"message": "Email is already verified. You can log in."}
 
     user.is_verified = True
-    user.email_verified_at = datetime.now(timezone.utc)
+    user.email_verified_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
 
     return {"message": "Email verified successfully! You can now log in."}
@@ -288,7 +288,7 @@ async def reset_password(body: schemas.ResetPasswordRequest, db: AsyncSession = 
 
     # Update password
     user.password_hash = get_password_hash(body.new_password)
-    user.password_changed_at = datetime.now(timezone.utc)
+    user.password_changed_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
 
     return {"message": "Password has been reset successfully."}
@@ -485,7 +485,7 @@ async def get_pending_invitations(
         db: AsyncSession = Depends(get_db),
 ):
     """List all pending invitations for the current user."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     result = await db.execute(
         select(ProjectInvitation)
@@ -553,7 +553,7 @@ async def accept_invitation(
     if invitation.status != InvitationStatus.pending.value:
         raise HTTPException(status_code=400, detail=f"Invitation is already {invitation.status}.")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     expires = invitation.expires_at
     if expires and expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
@@ -625,7 +625,7 @@ async def decline_invitation(
         raise HTTPException(status_code=400, detail=f"Invitation is already {invitation.status}.")
 
     invitation.status = InvitationStatus.declined.value
-    invitation.responded_at = datetime.now(timezone.utc)
+    invitation.responded_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
 
     return {"status": "declined", "invitation_id": str(invitation.invitation_id)}
