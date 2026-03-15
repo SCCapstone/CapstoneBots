@@ -28,7 +28,7 @@ CapstoneBots/
 │   ├── database.py    # Async DB connection + session management
 │   ├── routers/       # API routes: users.py, projects.py, storage.py
 │   ├── utils/         # auth.py, email.py, permissions.py, s3_cleanup.py
-│   ├── storage/       # S3/MinIO service layer (storage_service.py, minio_client.py)
+│   ├── storage/       # S3/MinIO service layer
 │   ├── migrations/    # Alembic database migrations
 │   └── tests/         # pytest test suite
 ├── frontend/          # Next.js frontend (see frontend/CLAUDE.md)
