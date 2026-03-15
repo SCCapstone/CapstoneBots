@@ -47,3 +47,6 @@ Thumbs.db
 
 # bash file to sync to external drive (dev item)
 sync-project.sh
+
+# Claude Code personal settings
+.claude/settings.local.json
