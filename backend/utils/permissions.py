@@ -126,6 +126,9 @@ async def get_user_projects(
     """
     Get all projects that a user has access to (owned or member).
 
+    Uses a single query via a JOIN on project_members to avoid
+    fetching duplicates (owner is always in project_members).
+
     Args:
         user_id: The user UUID
         db: Database session
@@ -133,30 +136,10 @@ async def get_user_projects(
     Returns:
         list[Project]: List of all projects user can access
     """
-    # Get projects where user is owner
-    owned_query = select(Project).where(Project.owner_id == user_id)
-
-    # Get projects where user is a member
-    member_query = (
+    query = (
         select(Project)
         .join(ProjectMember, ProjectMember.project_id == Project.project_id)
         .where(ProjectMember.user_id == user_id)
     )
-
-    # Execute both queries
-    owned_result = await db.execute(owned_query)
-    owned_projects = owned_result.scalars().all()
-
-    member_result = await db.execute(member_query)
-    member_projects = member_result.scalars().all()
-
-    # Combine and deduplicate
-    all_projects = list(owned_projects) + list(member_projects)
-    seen = set()
-    unique_projects = []
-    for project in all_projects:
-        if project.project_id not in seen:
-            seen.add(project.project_id)
-            unique_projects.append(project)
-
-    return unique_projects
+    result = await db.execute(query)
+    return list(result.scalars().unique().all())

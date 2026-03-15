@@ -7,15 +7,14 @@ file validation, deduplication, and data serialization.
 
 import json
 import hashlib
-from typing import Dict, Any, Optional, Tuple
-from pathlib import Path
+from typing import Dict, Any, Optional, Tuple, Union
 
 
 class StorageUtils:
     """Utility functions for storage operations"""
 
     @staticmethod
-    def compute_content_hash(data: Dict[str, Any] | bytes) -> str:
+    def compute_content_hash(data: Union[Dict[str, Any], bytes]) -> str:
         """
         Compute SHA256 hash of content for deduplication.
         
@@ -192,167 +191,4 @@ class StorageUtils:
         }
 
 
-class DeduplicationManager:
-    """Manages content deduplication for storage efficiency"""
-
-    def __init__(self, storage_service):
-        """
-        Initialize deduplication manager.
-        
-        Args:
-            storage_service: StorageService instance
-        """
-        self.storage = storage_service
-        self._hash_index: Dict[str, str] = {}  # blob_hash -> storage_path
-
-    def should_store_separately(self, blob_hash: str) -> bool:
-        """
-        Check if content with this hash already exists.
-        
-        Args:
-            blob_hash: Content hash
-            
-        Returns:
-            bool: True if content is new
-        """
-        return blob_hash not in self._hash_index
-
-    def register_hash(self, blob_hash: str, storage_path: str) -> None:
-        """
-        Register a content hash with its storage location.
-        
-        Args:
-            blob_hash: Content hash
-            storage_path: Path in storage
-        """
-        self._hash_index[blob_hash] = storage_path
-
-    def get_duplicate_path(self, blob_hash: str) -> Optional[str]:
-        """
-        Get storage path for duplicate content.
-        
-        Args:
-            blob_hash: Content hash
-            
-        Returns:
-            str: Storage path or None if not found
-        """
-        return self._hash_index.get(blob_hash)
-
-    def calculate_savings(self, total_size: int, actual_stored: int) -> Dict[str, Any]:
-        """
-        Calculate deduplication savings.
-        
-        Args:
-            total_size: Total content size before deduplication
-            actual_stored: Actual size stored
-            
-        Returns:
-            dict: Savings statistics
-        """
-        saved = total_size - actual_stored
-        savings_percent = (saved / total_size * 100) if total_size > 0 else 0
-        
-        return {
-            "total_size": total_size,
-            "actual_stored": actual_stored,
-            "bytes_saved": saved,
-            "percent_saved": round(savings_percent, 2),
-        }
-
-
-class VersioningHelper:
-    """Helper functions for version management"""
-
-    @staticmethod
-    def create_version_tag(commit_hash: str, timestamp_str: str) -> str:
-        """
-        Create a human-readable version tag.
-        
-        Args:
-            commit_hash: Commit hash (use first 8 chars)
-            timestamp_str: Timestamp string
-            
-        Returns:
-            str: Version tag
-        """
-        return f"v_{timestamp_str}_{commit_hash[:8]}"
-
-    @staticmethod
-    def parse_version_tag(tag: str) -> Dict[str, str]:
-        """
-        Parse a version tag back to components.
-        
-        Args:
-            tag: Version tag
-            
-        Returns:
-            dict: Parsed components
-        """
-        parts = tag.split('_')
-        if len(parts) >= 3:
-            return {
-                "commit_hash_short": parts[-1],
-                "timestamp": '_'.join(parts[1:-1])
-            }
-        return {}
-
-    @staticmethod
-    def get_version_range(start_commit_hash: str, end_commit_hash: str) -> str:
-        """
-        Create a version range representation.
-        
-        Args:
-            start_commit_hash: Starting commit hash
-            end_commit_hash: Ending commit hash
-            
-        Returns:
-            str: Version range (e.g., "abc1234..def5678")
-        """
-        return f"{start_commit_hash[:8]}..{end_commit_hash[:8]}"
-
-
-class StorageCompression:
-    """Utilities for compressing and managing large files"""
-
-    import gzip
-    import tarfile
-    from io import BytesIO
-
-    @staticmethod
-    def compress_json(data: Dict[str, Any]) -> bytes:
-        """
-        Compress JSON data using gzip.
-        
-        Args:
-            data: Dictionary to compress
-            
-        Returns:
-            bytes: Compressed data
-        """
-        json_bytes = json.dumps(data).encode('utf-8')
-        compressed = StorageCompression.gzip.compress(json_bytes)
-        return compressed
-
-    @staticmethod
-    def decompress_json(data: bytes) -> Dict[str, Any]:
-        """
-        Decompress gzipped JSON data.
-        
-        Args:
-            data: Compressed data
-            
-        Returns:
-            dict: Decompressed dictionary
-        """
-        decompressed = StorageCompression.gzip.decompress(data)
-        return json.loads(decompressed.decode('utf-8'))
-
-
-# Export utility classes
-__all__ = [
-    "StorageUtils",
-    "DeduplicationManager",
-    "VersioningHelper",
-    "StorageCompression",
-]
+__all__ = ["StorageUtils"]

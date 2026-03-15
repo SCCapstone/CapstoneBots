@@ -15,7 +15,7 @@ The API mimics Git workflows adapted for 3D asset collaboration.
 from typing import List
 from uuid import UUID
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -165,109 +165,39 @@ async def create_project(
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project_id: UUID,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Get detailed information about a specific project.
-    
-    This endpoint retrieves a single project by its unique ID. Used to display
-    project details, settings, and metadata.
-    
-    Args:
-        project_id: UUID of the project to retrieve
-        db: Database session dependency
-        
-    Returns:
-        ProjectResponse: Project details and metadata
-        
-    Raises:
-        HTTPException 404: If project with given ID doesn't exist
-        
-    Example:
-        GET /api/projects/123e4567-e89b-12d3-a456-426614174000
-    """
-    # Fetch project by primary key (UUID)
-    result = await db.get(Project, project_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return result
+    """Get detailed information about a specific project (members only)."""
+    project, _ = await check_project_access(project_id, current_user.user_id, db)
+    return project
 
 @router.put("/{project_id}", response_model=ProjectResponse)
 async def update_project(
     project_id: UUID,
     update_data: ProjectUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Update project details (name, description, or active status).
-    
-    This endpoint allows partial updates - only fields provided in the request
-    will be modified. Used for renaming projects, updating descriptions, or
-    archiving/activating projects.
-    
-    Args:
-        project_id: UUID of the project to update
-        update_data: ProjectUpdate schema with fields to modify
-        db: Database session dependency
-        
-    Returns:
-        ProjectResponse: Updated project details
-        
-    Raises:
-        HTTPException 404: If project doesn't exist
-        
-    Example:
-        PUT /api/projects/123e4567-e89b-12d3-a456-426614174000
-        {
-            "name": "Updated Project Name",
-            "active": false
-        }
-    """
-    # Fetch the project to update
-    project = await db.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    # Only update fields that were provided (exclude_unset=True)
-    # This allows partial updates without overwriting other fields
-    update_dict = update_data.dict(exclude_unset=True)
+    """Update project details (name, description, or active status). Owner only."""
+    project, _ = await check_project_access(project_id, current_user.user_id, db, require_owner=True)
+
+    update_dict = update_data.model_dump(exclude_unset=True)
     for key, value in update_dict.items():
         setattr(project, key, value)
-    
+
     await db.commit()
-    await db.refresh(project)  # Get the updated state from DB
+    await db.refresh(project)
     return project
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
     project_id: UUID,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Permanently delete a project and all associated data.
-    
-    WARNING: This is a destructive operation that will cascade delete all related
-    data including branches, commits, objects, locks, and conflicts. This action
-    cannot be undone.
-    
-    Args:
-        project_id: UUID of the project to delete
-        db: Database session dependency
-        
-    Returns:
-        No content (204 status code)
-        
-    Raises:
-        HTTPException 404: If project doesn't exist
-        
-    Example:
-        DELETE /api/projects/123e4567-e89b-12d3-a456-426614174000
-    """
-    # Fetch the project to delete
-    project = await db.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
+    """Permanently delete a project and all associated data. Owner only."""
+    await check_project_access(project_id, current_user.user_id, db, require_owner=True)
     await delete_project_data(db, project_id)
     await db.commit()
 
@@ -276,41 +206,15 @@ async def delete_project(
 @router.get("/{project_id}/branches", response_model=List[BranchResponse])
 async def get_project_branches(
     project_id: UUID,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Get all branches in a project (similar to 'git branch').
-    
-    This endpoint lists all branches within a project. Branches allow multiple
-    team members to work on different features simultaneously without conflicts.
-    Similar to Git branches, each branch maintains its own commit history.
-    
-    Args:
-        project_id: UUID of the project
-        db: Database session dependency
-        
-    Returns:
-        List[BranchResponse]: All branches ordered by creation date
-        
-    Example:
-        GET /api/projects/123e4567-e89b-12d3-a456-426614174000/branches
-        
-        Response:
-        [
-            {
-                "branch_id": "uuid",
-                "branch_name": "main",
-                "project_id": "123e4567-e89b-12d3-a456-426614174000",
-                "created_by": "user-id",
-                "created_at": "2025-12-01T10:00:00"
-            }
-        ]
-    """
-    # Query all branches for this project, sorted by creation time
+    """Get all branches in a project (members only)."""
+    await check_project_access(project_id, current_user.user_id, db)
     query = (
         select(Branch)
         .where(Branch.project_id == project_id)
-        .order_by(Branch.created_at)  # Oldest first (main branch typically first)
+        .order_by(Branch.created_at)
     )
     result = await db.execute(query)
     return result.scalars().all()
@@ -347,18 +251,24 @@ async def create_branch(
             "created_by": "user-id"
         }
     """
-    # Verify the project exists before creating a branch
-    project = await db.get(Project, project_id)
-    if not project or project.owner_id != current_user.user_id:
-        raise HTTPException(status_code=404, detail="Project not found")
+    # Validate branch name
+    branch_name = req.name.strip() if req.name else ""
+    if not branch_name:
+        raise HTTPException(status_code=400, detail="Branch name cannot be empty")
+    if len(branch_name) > 255:
+        raise HTTPException(status_code=400, detail="Branch name too long (max 255 characters)")
+    if "/" in branch_name:
+        raise HTTPException(status_code=400, detail="Branch name cannot contain slashes")
 
-    
+    # Editors and above can create branches
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+
     # Create new branch within the project
     new_branch = Branch(
         project_id=project_id,
-        branch_name=req.name,                 # map name -> branch_name
+        branch_name=branch_name,
         parent_branch_id=req.parent_branch_id,
-        created_by=current_user.user_id,      # use auth user, NOT request body
+        created_by=current_user.user_id,
     )
     db.add(new_branch)
     await db.commit()
@@ -373,17 +283,10 @@ async def get_commit_history(
         project_id: UUID,
         branch_name: str = "main",
         db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
-    """
-    Get commit history for a branch (similar to 'git log').
-
-    Returns an empty list if the branch has no commits or does not exist.
-    """
-
-    # 1) Ensure the project exists (optional but nice for clarity)
-    project = await db.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    """Get commit history for a branch (members only)."""
+    await check_project_access(project_id, current_user.user_id, db)
 
     # 2) Find the branch for this project + name
     branch_result = await db.execute(
@@ -443,17 +346,22 @@ async def create_commit(
         HTTPException 423: If any object being committed is locked by another user
     """
 
-    # Verify the branch exists
+    # Editors and above can commit
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+
+    if not data.objects:
+        raise HTTPException(status_code=400, detail="Commit must include at least one object")
+
+    # Verify the branch exists and belongs to this project
     branch = await db.get(Branch, data.branch_id)
     if not branch or branch.project_id != project_id:
         raise HTTPException(status_code=404, detail="Branch not found")
 
-    # ============================
-    # Enforce object locks (Issue #33)
-    # ============================
+    now = datetime.now(timezone.utc)
+
+    # Enforce object locks
     for obj_data in data.objects:
         obj_name = obj_data.object_name
-
         lock_query = (
             select(ObjectLock)
             .where(
@@ -465,25 +373,28 @@ async def create_commit(
         lock_result = await db.execute(lock_query)
         lock = lock_result.scalar_one_or_none()
 
-        if lock and lock.expires_at and lock.expires_at < datetime.utcnow():
-            await db.delete(lock)
-            await db.commit()
-            lock = None
+        if lock and lock.expires_at:
+            expires = lock.expires_at
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires < now:
+                await db.delete(lock)
+                await db.flush()
+                lock = None
 
         if lock and lock.locked_by != current_user.user_id:
             raise HTTPException(
                 status_code=423,
                 detail=f"Object '{obj_name}' is locked by another user.",
             )
-    
+
     # Generate unique commit hash using SHA256
-    now = datetime.utcnow()
     commit_content = (
         f"{project_id}{data.branch_id}{current_user.user_id}"
         f"{data.commit_message}{now.isoformat()}"
     )
     commit_hash = hashlib.sha256(commit_content.encode()).hexdigest()
-    
+
     # Create the commit record
     new_commit = Commit(
         project_id=project_id,
@@ -496,12 +407,12 @@ async def create_commit(
     )
     db.add(new_commit)
     await db.flush()
-    
+
     # Add all Blender objects that are part of this commit
     for obj_data in data.objects:
         blender_obj = BlenderObject(
             commit_id=new_commit.commit_id,
-            **obj_data.dict()
+            **obj_data.model_dump()
         )
         db.add(blender_obj)
     
@@ -516,43 +427,15 @@ async def create_commit(
 async def get_commit_objects(
     project_id: UUID,
     commit_id: UUID,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Get all Blender objects in a specific commit (similar to 'git show').
-    
-    This endpoint retrieves the list of 3D objects that were modified or included
-    in a specific commit. Each object contains file paths to the asset data stored
-    in object storage (MinIO/S3), along with metadata about the object type and
-    transformations.
-    
-    Args:
-        project_id: UUID of the project (for context/validation)
-        commit_id: UUID of the commit to inspect
-        db: Database session dependency
-        
-    Returns:
-        List[BlenderObjectResponse]: All objects in the commit, sorted by name
-        
-    Example:
-        GET /api/projects/123e4567-e89b-12d3-a456-426614174000/commits/commit-uuid/objects
-        
-        Response:
-        [
-            {
-                "object_id": "uuid",
-                "object_name": "Cube",
-                "object_type": "MESH",
-                "file_path": "s3://bucket/project/cube.blend",
-                "commit_id": "commit-uuid"
-            }
-        ]
-    """
-    # Query all Blender objects associated with this commit
+    """Get all Blender objects in a specific commit (members only)."""
+    await check_project_access(project_id, current_user.user_id, db)
     query = (
         select(BlenderObject)
         .where(BlenderObject.commit_id == commit_id)
-        .order_by(BlenderObject.object_name)  # Alphabetical order for consistency
+        .order_by(BlenderObject.object_name)
     )
     result = await db.execute(query)
     return result.scalars().all()
@@ -562,48 +445,15 @@ async def get_commit_objects(
 @router.get("/{project_id}/locks", response_model=List[ObjectLockResponse])
 async def get_object_locks(
     project_id: UUID,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Get all active object locks in a project.
-    
-    This endpoint retrieves all currently locked 3D objects. Locks prevent
-    multiple users from editing the same object simultaneously, avoiding merge
-    conflicts. Similar to file locking in Git LFS.
-    
-    Before editing an object, clients should:
-    1. Check if the object is locked
-    2. Acquire a lock if available
-    3. Edit the object
-    4. Commit changes
-    5. Release the lock
-    
-    Args:
-        project_id: UUID of the project
-        db: Database session dependency
-        
-    Returns:
-        List[ObjectLockResponse]: All active locks, ordered by lock time
-        
-    Example:
-        GET /api/projects/123e4567-e89b-12d3-a456-426614174000/locks
-        
-        Response:
-        [
-            {
-                "lock_id": "uuid",
-                "object_name": "Cube",
-                "locked_by": "user-id",
-                "locked_at": "2025-12-02T14:00:00",
-                "expires_at": "2025-12-02T16:00:00"
-            }
-        ]
-    """
-    # Query all active locks for this project
+    """Get all active object locks in a project (members only)."""
+    await check_project_access(project_id, current_user.user_id, db)
     query = (
         select(ObjectLock)
         .where(ObjectLock.project_id == project_id)
-        .order_by(ObjectLock.locked_at)  # Oldest locks first
+        .order_by(ObjectLock.locked_at)
     )
     result = await db.execute(query)
     return result.scalars().all()
@@ -644,8 +494,10 @@ async def lock_object(
             "expires_at": "2025-12-02T16:00:00"
         }
     """
+    # Editors and above can acquire locks
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+
     # Check if the object is already locked in this branch
-    # Prevents multiple users from locking the same object simultaneously
     existing_lock = (
         select(ObjectLock)
         .where(
@@ -675,38 +527,21 @@ async def lock_object(
 async def unlock_object(
     project_id: UUID,
     lock_id: UUID,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Release a lock on an object, allowing others to edit it.
-    
-    This endpoint removes an object lock, typically called after a user finishes
-    editing and commits their changes. Once unlocked, other team members can
-    acquire the lock and make their own edits.
-    
-    Best practice: Always unlock objects after committing changes to avoid
-    blocking other team members.
-    
-    Args:
-        project_id: UUID of the project
-        lock_id: UUID of the lock to release
-        db: Database session dependency
-        
-    Returns:
-        No content (204 status code)
-        
-    Raises:
-        HTTPException 404: If lock doesn't exist or doesn't belong to this project
-        
-    Example:
-        DELETE /api/projects/123e4567-e89b-12d3-a456-426614174000/locks/lock-uuid
-    """
-    # Fetch the lock to delete
+    """Release a lock. Only the lock holder or a project owner can release a lock."""
     lock = await db.get(ObjectLock, lock_id)
     if not lock or lock.project_id != project_id:
         raise HTTPException(status_code=404, detail="Lock not found")
-    
-    # Remove the lock, freeing the object for other users
+
+    _, caller_role = await check_project_access(project_id, current_user.user_id, db)
+    if lock.locked_by != current_user.user_id and caller_role != MemberRole.owner.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the lock holder or project owner can release this lock",
+        )
+
     await db.delete(lock)
     await db.commit()
 
@@ -715,48 +550,18 @@ async def unlock_object(
 @router.get("/{project_id}/conflicts", response_model=List[MergeConflictResponse])
 async def get_unresolved_conflicts(
     project_id: UUID,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Get all unresolved merge conflicts in a project.
-    
-    This endpoint retrieves conflicts that occur when merging branches. Conflicts
-    happen when the same object is modified differently in two branches. Similar
-    to Git merge conflicts, these must be manually resolved by choosing which
-    version to keep or manually merging the changes.
-    
-    Conflicts are tracked to ensure they don't get overlooked during merges.
-    
-    Args:
-        project_id: UUID of the project
-        db: Database session dependency
-        
-    Returns:
-        List[MergeConflictResponse]: All unresolved conflicts, oldest first
-        
-    Example:
-        GET /api/projects/123e4567-e89b-12d3-a456-426614174000/conflicts
-        
-        Response:
-        [
-            {
-                "conflict_id": "uuid",
-                "object_name": "Cube",
-                "source_branch_id": "branch-1-uuid",
-                "target_branch_id": "branch-2-uuid",
-                "resolved": false,
-                "created_at": "2025-12-02T10:00:00"
-            }
-        ]
-    """
-    # Query only unresolved conflicts for this project
+    """Get all unresolved merge conflicts in a project (members only)."""
+    await check_project_access(project_id, current_user.user_id, db)
     query = (
         select(MergeConflict)
         .where(
             MergeConflict.project_id == project_id,
-            MergeConflict.resolved == False  # Only show pending conflicts
+            MergeConflict.resolved == False,
         )
-        .order_by(MergeConflict.created_at)  # Oldest conflicts first (priority)
+        .order_by(MergeConflict.created_at)
     )
     result = await db.execute(query)
     return result.scalars().all()
@@ -765,50 +570,17 @@ async def get_unresolved_conflicts(
 async def resolve_conflict(
     project_id: UUID,
     conflict_id: UUID,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Mark a merge conflict as resolved.
-    
-    This endpoint marks a conflict as resolved after a user manually resolves it.
-    Resolution typically involves:
-    1. Reviewing both versions of the conflicting object
-    2. Deciding which version to keep or manually merging changes
-    3. Creating a new commit with the resolved object
-    4. Marking the conflict as resolved via this endpoint
-    
-    This is similar to 'git add' after manually fixing merge conflicts.
-    
-    Args:
-        project_id: UUID of the project
-        conflict_id: UUID of the conflict to mark as resolved
-        db: Database session dependency
-        
-    Returns:
-        MergeConflictResponse: Updated conflict with resolved=true
-        
-    Raises:
-        HTTPException 404: If conflict doesn't exist or doesn't belong to this project
-        
-    Example:
-        PUT /api/projects/123e4567-e89b-12d3-a456-426614174000/conflicts/conflict-uuid
-        
-        Response:
-        {
-            "conflict_id": "uuid",
-            "resolved": true,
-            "resolved_at": "2025-12-02T15:30:00"
-        }
-    """
-    # Fetch the conflict to resolve
+    """Mark a merge conflict as resolved (editors and above)."""
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
     conflict = await db.get(MergeConflict, conflict_id)
     if not conflict or conflict.project_id != project_id:
         raise HTTPException(status_code=404, detail="Conflict not found")
-    
-    # Mark as resolved (user has manually fixed the conflict)
     conflict.resolved = True
     await db.commit()
-    await db.refresh(conflict)  # Get updated timestamp if any
+    await db.refresh(conflict)
     return conflict
 
 
@@ -907,7 +679,7 @@ async def send_invitation(
         invitee_email=invitee_email,
         role=data.role,
         status=InvitationStatus.pending.value,
-        expires_at=datetime.utcnow() + timedelta(days=INVITE_EXPIRY_DAYS),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=INVITE_EXPIRY_DAYS),
     )
     db.add(invitation)
     await db.commit()
@@ -1048,7 +820,7 @@ async def add_project_member(
         invitee_email=user_to_add.email,
         role=role,
         status=InvitationStatus.pending.value,
-        expires_at=datetime.utcnow() + timedelta(days=INVITE_EXPIRY_DAYS),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=INVITE_EXPIRY_DAYS),
     )
     db.add(invitation)
     await db.commit()
