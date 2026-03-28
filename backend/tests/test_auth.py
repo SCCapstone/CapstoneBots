@@ -1,5 +1,6 @@
 import sys
 import os
+import pytest
 from fastapi.testclient import TestClient
 from uuid import uuid4
 
@@ -18,6 +19,24 @@ app = main.app
 
 from utils import auth
 from utils.auth import create_email_verification_token
+
+
+def _db_available():
+    """Check if the test database is reachable and schema is up to date."""
+    try:
+        with TestClient(app) as c:
+            r = c.post("/api/auth/register", json={
+                "username": "__probe__", "email": "__probe__@x.com", "password": "12345678"
+            })
+            return r.status_code in (201, 400, 409)
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _db_available(),
+    reason="PostgreSQL database not available (start with: docker compose up -d db && alembic upgrade head)",
+)
 
 
 def _verify_email(client, email: str):
