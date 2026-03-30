@@ -83,26 +83,61 @@ async def upload_blender_object(
     """
     # Editors and above can upload objects
     await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
-    
+
+    # Resolve commit_hash → Commit row to get the UUID FK
+    result = await db.execute(
+        select(Commit).where(
+            Commit.project_id == project_id,
+            Commit.commit_hash == commit_hash
+        )
+    )
+    commit = result.scalar_one_or_none()
+    if not commit:
+        raise HTTPException(status_code=404, detail="Commit not found")
+
     # Read and parse JSON metadata
     json_content = await json_file.read()
     try:
         json_data = json.loads(json_content)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON in json_file")
-    
+
     # Upload JSON metadata
     json_path = storage.upload_object_json(project_id, object_id, commit_hash, json_data)
-    
+
     # Upload mesh data if provided
     mesh_path = None
+    mesh_content = None
     if mesh_file:
         mesh_content = await mesh_file.read()
         mesh_path = storage.upload_object_mesh(project_id, object_id, commit_hash, mesh_content)
-    
+
     # Calculate blob hash for deduplication
     blob_hash = storage.compute_blob_hash(json_data)
-    
+
+    # Insert BlenderObject DB record; clean up S3 on failure to prevent orphans
+    try:
+        db_object = BlenderObject(
+            object_id=object_id,
+            commit_id=commit.commit_id,
+            object_name=object_name,
+            object_type=object_type,
+            json_data_path=json_path,
+            mesh_data_path=mesh_path,
+            blob_hash=blob_hash,
+        )
+        db.add(db_object)
+        await db.commit()
+    except Exception as e:
+        try:
+            storage.delete_object(json_path)
+            if mesh_path:
+                storage.delete_object(mesh_path)
+        except Exception:
+            pass
+        logger.error("DB insert failed for object %s: %s", object_id, e)
+        raise HTTPException(status_code=500, detail="Failed to record object in database")
+
     return {
         "object_id": str(object_id),
         "object_name": object_name,
@@ -111,7 +146,7 @@ async def upload_blender_object(
         "mesh_path": mesh_path,
         "blob_hash": blob_hash,
         "json_size": len(json_content),
-        "mesh_size": len(mesh_content) if mesh_file else None,
+        "mesh_size": len(mesh_content) if mesh_content is not None else None,
     }
 
 
