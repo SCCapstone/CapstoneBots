@@ -931,12 +931,88 @@ def _download_project_file_info(prefs, file_info: dict, temp_subdir: str = "bvcs
     return local_path
 
 
+# ---------------- Object-Level Imports ----------------
+from blender_vcs.object_serialization import (
+    serialize_object_metadata,
+    serialize_mesh_data,
+    compute_object_hash,
+    deserialize_mesh_data,
+    reconstruct_object_from_json,
+    reconstruct_scene,
+)
+from blender_vcs.staging import StagingArea
+from blender_vcs.diff import compute_scene_diff, ObjectStatus
+from blender_vcs.merge import compute_object_diff, ConflictType, MergePlan
+from blender_vcs.push_pull import (
+    prepare_push_objects,
+    build_commit_objects_list,
+    prepare_pull_data,
+    MESH_TYPES,
+)
+
+# Global staging area instance
+_staging_area = StagingArea()
+
+
+def _get_parent_commit_objects(prefs) -> dict:
+    """Fetch objects from the parent commit (branch HEAD).
+
+    Returns mapping of object_name → {blob_hash, json_data_path, mesh_data_path}.
+    """
+    headers = get_auth_headers(prefs)
+    api_base = get_api_base(prefs)
+    project_id = prefs.project_id
+
+    try:
+        commits_resp = requests.get(
+            f"{api_base}/api/projects/{project_id}/commits",
+            params={"branch_name": "main"},
+            headers=headers,
+            timeout=10,
+        )
+        commits_resp.raise_for_status()
+        commits = commits_resp.json()
+        if not isinstance(commits, list) or not commits:
+            return {}
+
+        latest_commit = commits[0]
+        commit_id = latest_commit.get("commit_id")
+        if not commit_id:
+            return {}
+
+        objects_resp = requests.get(
+            f"{api_base}/api/projects/{project_id}/commits/{commit_id}/objects",
+            headers=headers,
+            timeout=10,
+        )
+        objects_resp.raise_for_status()
+        commit_objects = objects_resp.json()
+        if not isinstance(commit_objects, list):
+            return {}
+
+        result = {}
+        for obj in commit_objects:
+            if not isinstance(obj, dict):
+                continue
+            name = obj.get("object_name")
+            if name:
+                result[name] = {
+                    "blob_hash": obj.get("blob_hash"),
+                    "json_data_path": obj.get("json_data_path"),
+                    "mesh_data_path": obj.get("mesh_data_path"),
+                    "object_type": obj.get("object_type"),
+                    "object_id": obj.get("object_id"),
+                }
+        return result
+    except Exception as e:
+        logger.error(f"Failed to fetch parent commit objects: {e}")
+        return {}
+
+
 # ---------------- Stage Objects ----------------
 class BVCS_OT_StageObjects(bpy.types.Operator):
     bl_idname = "bvcs.stage_objects"
     bl_label = "Stage Selected Objects"
-
-    staged_objects: list = []
 
     def execute(self, context):
         selected_objects = context.selected_objects
@@ -944,9 +1020,39 @@ class BVCS_OT_StageObjects(bpy.types.Operator):
             self.report({'ERROR'}, "No objects selected")
             return {'CANCELLED'}
 
-        BVCS_OT_StageObjects.staged_objects = [obj.name for obj in selected_objects]
+        for obj in selected_objects:
+            _staging_area.stage(obj.name)
         self.report({'INFO'}, f"Staged {len(selected_objects)} objects")
-        logger.info(f"Staged objects: {BVCS_OT_StageObjects.staged_objects}")
+        logger.info(f"Staged objects: {_staging_area.get_staged_names()}")
+        return {'FINISHED'}
+
+
+class BVCS_OT_StageAll(bpy.types.Operator):
+    bl_idname = "bvcs.stage_all"
+    bl_label = "Stage All Objects"
+
+    def execute(self, context):
+        scene_names = [obj.name for obj in bpy.context.scene.objects]
+        if not scene_names:
+            self.report({'ERROR'}, "No objects in scene")
+            return {'CANCELLED'}
+        _staging_area.stage_all(scene_names)
+        self.report({'INFO'}, f"Staged all {len(scene_names)} objects")
+        return {'FINISHED'}
+
+
+class BVCS_OT_UnstageObject(bpy.types.Operator):
+    bl_idname = "bvcs.unstage_object"
+    bl_label = "Unstage Selected Objects"
+
+    def execute(self, context):
+        selected_objects = context.selected_objects
+        if not selected_objects:
+            self.report({'ERROR'}, "No objects selected")
+            return {'CANCELLED'}
+        for obj in selected_objects:
+            _staging_area.unstage(obj.name)
+        self.report({'INFO'}, f"Unstaged {len(selected_objects)} objects")
         return {'FINISHED'}
 
 # ---------------- Commit ----------------
@@ -962,6 +1068,11 @@ class BVCS_OT_Commit(bpy.types.Operator):
             self.report({'ERROR'}, "No project selected")
             return {'CANCELLED'}
 
+        # Require staged objects
+        if not _staging_area.staged_objects:
+            self.report({'ERROR'}, "No objects staged. Stage objects before committing.")
+            return {'CANCELLED'}
+
         # Save the current blend file
         local_file_path = bpy.context.blend_data.filepath
         if not local_file_path:
@@ -975,16 +1086,20 @@ class BVCS_OT_Commit(bpy.types.Operator):
             wm = context.window_manager
             base_commit_hash = _get_last_synced_commit_hash(wm)
 
+            # Capture staged object names in the pending commit
+            staged_names = _staging_area.get_staged_names()
+
             # Store commit info locally (will be synced to DB when pushed)
             context.window_manager["bvcs_pending_commit"] = {
                 "message": self.commit_message,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "file_path": local_file_path,
                 "base_commit_hash": base_commit_hash,
+                "staged_objects": staged_names,
             }
 
-            self.report({'INFO'}, f"Committed locally: {self.commit_message}")
-            logger.info(f"Local commit created: {self.commit_message}")
+            self.report({'INFO'}, f"Committed locally: {self.commit_message} ({len(staged_names)} objects)")
+            logger.info(f"Local commit created: {self.commit_message}, staged: {staged_names}")
 
         except Exception as e:
             self.report({'ERROR'}, f"Commit failed: {e}")
@@ -1044,16 +1159,11 @@ class BVCS_OT_RefreshS3(bpy.types.Operator):
 # ---------------- Push / Pull / Conflicts ----------------
 class BVCS_OT_Push(bpy.types.Operator):
     bl_idname = "bvcs.push"
-    bl_label = "Push to S3 and Database"
+    bl_label = "Push to Remote"
 
     def execute(self, context):
         prefs = get_prefs(context)
         wm = context.window_manager
-        local_file_path = bpy.context.blend_data.filepath
-
-        if not local_file_path:
-            self.report({'ERROR'}, "Please save your blend file before pushing")
-            return {'CANCELLED'}
 
         if not prefs.project_id:
             self.report({'ERROR'}, "No project selected")
@@ -1065,165 +1175,202 @@ class BVCS_OT_Push(bpy.types.Operator):
             self.report({'ERROR'}, "No commit to push. Please commit first.")
             return {'CANCELLED'}
 
+        # ── Conflict check ──────────────────────────────────────────────
         try:
-            latest_remote = _get_latest_remote_blend_file_info(prefs)
+            remote_commit_hash = _get_latest_remote_commit_hash(prefs)
         except Exception as e:
             self.report({'ERROR'}, f"Failed to check remote state: {e}")
             return {'CANCELLED'}
 
-        # determine whether to perform a merge-style conflict check. if the
-        # last remote commit was authored by the same user who is currently
-        # pushing we treat the situation as safe (e.g. user pushing from a
-        # second machine) and allow a fast-forward.
         user = get_logged_in_user(prefs)
-        remote_author = (latest_remote or {}).get("author_id")
-        if user and remote_author and user.get("user_id") == remote_author:
-            logger.info("Remote head authored by same user, skipping merge conflict check")
-        else:
-            remote_commit_hash = (latest_remote or {}).get("commit_hash") or ""
-            base_commit_hash = str(pending_commit.get("base_commit_hash") or "")
-            if remote_commit_hash:
-                # If there is a remote history but this local commit has no base,
-                # the user likely hasn't pulled yet. Block the push and instruct them
-                # to pull before creating their first commit.
-                if not base_commit_hash:
+        base_commit_hash = str(pending_commit.get("base_commit_hash") or "")
+
+        if remote_commit_hash:
+            if not base_commit_hash:
+                self.report(
+                    {'ERROR'},
+                    "Push blocked: remote history exists but your commit has no base. Pull first."
+                )
+                return {'CANCELLED'}
+            if base_commit_hash != remote_commit_hash:
+                # Object-level three-way merge check
+                parent_objects = _get_parent_commit_objects(prefs)
+                scene_objects_map = {}
+                for obj in bpy.context.scene.objects:
+                    meta = serialize_object_metadata(obj)
+                    scene_objects_map[obj.name] = compute_object_hash(meta)
+
+                remote_objects_map = {
+                    name: data.get("blob_hash", "")
+                    for name, data in parent_objects.items()
+                }
+                base_objects_map = {}  # From base commit — use remote as proxy for now
+                # For a true base, we'd need the common ancestor. For simplicity,
+                # detect if there are object-level conflicts.
+                merge_plan = compute_object_diff(
+                    remote_objects_map,  # treat remote HEAD as base for conflict check
+                    scene_objects_map,
+                    remote_objects_map,
+                )
+                if merge_plan.conflicts:
+                    conflict_names = [c["object_name"] for c in merge_plan.conflicts]
                     wm["bvcs_push_conflict"] = {
                         "base_commit_hash": base_commit_hash,
                         "remote_commit_hash": remote_commit_hash,
-                        "remote_commit_id": (latest_remote or {}).get("commit_id"),
-                        "remote_commit_message": (latest_remote or {}).get("commit_message"),
-                        "remote_s3_path": (latest_remote or {}).get("s3_path"),
-                        "remote_object_name": (latest_remote or {}).get("object_name"),
-                        "local_file_path": pending_commit.get("file_path") or local_file_path,
+                        "conflict_objects": conflict_names,
                         "detected_at": datetime.now(timezone.utc).isoformat(),
                     }
                     self.report(
                         {'ERROR'},
-                        "Push blocked: remote history exists but your commit has no base. Pull the latest version before creating your first commit."
-                    )
-                    return {'CANCELLED'}
-                # Normal conflict: local base differs from current remote head.
-                if base_commit_hash != remote_commit_hash:
-                    wm["bvcs_push_conflict"] = {
-                        "base_commit_hash": base_commit_hash,
-                        "remote_commit_hash": remote_commit_hash,
-                        "remote_commit_id": (latest_remote or {}).get("commit_id"),
-                        "remote_commit_message": (latest_remote or {}).get("commit_message"),
-                        "remote_s3_path": (latest_remote or {}).get("s3_path"),
-                        "remote_object_name": (latest_remote or {}).get("object_name"),
-                        "local_file_path": pending_commit.get("file_path") or local_file_path,
-                        "detected_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                    self.report(
-                        {'ERROR'},
-                        "Push blocked: remote changed since your last pull. Pull latest, merge, then recommit before pushing."
+                        f"Push blocked: conflicts on {', '.join(conflict_names)}. Resolve before pushing."
                     )
                     return {'CANCELLED'}
 
-        s3_info, err = make_s3_client(prefs)
-        if err:
-            self.report({'ERROR'}, f"S3 error: {err}")
-            logger.error(f"S3 push failed: {err}")
-            return {'CANCELLED'}
+                # No conflicts — can proceed (auto-merge)
+                logger.info("No object-level conflicts, proceeding with push")
 
-        client = s3_info["client"]
-        bucket = s3_info["bucket"]
+        # ── Prepare objects ──────────────────────────────────────────────
+        self.report({'INFO'}, "Preparing objects for upload...")
 
-        # Create a unique folder name based on project_id and timestamp
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        s3_folder_name = f"{prefs.project_id}_{timestamp}"
+        parent_objects = _get_parent_commit_objects(prefs)
+        scene_objects = list(bpy.context.scene.objects)
+        staged_names = set(pending_commit.get("staged_objects", []))
 
+        push_result = prepare_push_objects(
+            scene_objects,
+            parent_objects,
+            staged_names=staged_names if staged_names else None,
+        )
+
+        # ── Upload changed objects via presigned URLs / direct upload ────
+        headers = get_auth_headers(prefs)
+        api_base = get_api_base(prefs)
+
+        # Get main branch ID
         try:
-            # Step 1: Upload only the .blend file to S3
-            self.report({'INFO'}, "Uploading .blend to S3...")
-            s3_key = upload_file_to_s3(local_file_path, bucket, s3_folder_name, client)
-            if not s3_key:
-                self.report({'ERROR'}, "Failed to upload .blend file to S3")
-                return {'CANCELLED'}
-            # Build the s3 path used in DB (s3://bucket/<s3_key>)
-            s3_blend_path = f"s3://{bucket}/{s3_key}"
-
-            # Step 2: Get current user for author_id
-            user = get_logged_in_user(prefs)
-            if not user:
-                self.report({'ERROR'}, "Cannot get logged-in user")
-                return {'CANCELLED'}
-
-            # Step 3: Get main branch ID
-            headers = {"Authorization": f"Bearer {prefs.auth_token}"}
-            branches_resp = requests.get(f"{prefs.api_url}/api/projects/{prefs.project_id}/branches",
-                                         headers=headers, timeout=10)
+            branches_resp = requests.get(
+                f"{api_base}/api/projects/{prefs.project_id}/branches",
+                headers=headers, timeout=10
+            )
             branches_resp.raise_for_status()
             branches = branches_resp.json()
             main_branch = next((b for b in branches if b.get("branch_name") == "main"), None)
             if not main_branch:
                 self.report({'ERROR'}, "Main branch not found")
                 return {'CANCELLED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to fetch branches: {e}")
+            return {'CANCELLED'}
 
-            # Step 4: Build S3 paths for objects
-            blend_filename = os.path.basename(local_file_path)
-            s3_blend_path = f"s3://{bucket}/{s3_folder_name}/{blend_filename}"
+        if not user:
+            user = get_logged_in_user(prefs)
+        if not user:
+            self.report({'ERROR'}, "Cannot get logged-in user")
+            return {'CANCELLED'}
 
-            # Create object metadata - one entry for the main .blend file
-            objects_data = [{
-                "object_name": blend_filename,
-                "object_type": "BLEND_FILE",
-                "json_data_path": s3_blend_path,
-                "mesh_data_path": None,
-                "parent_object_id": None,
-                "blob_hash": hashlib.sha256(s3_blend_path.encode()).hexdigest()
-            }]
+        # First, create the commit to get a commit_hash for S3 paths
+        commit_hash_for_paths = hashlib.sha256(
+            f"{prefs.project_id}{main_branch['branch_id']}{user['user_id']}"
+            f"{pending_commit['message']}{datetime.now(timezone.utc).isoformat()}".encode()
+        ).hexdigest()
 
-            # Step 5: Create commit in database
+        upload_results = {}
+        changed_objects = [obj for obj in push_result if obj["changed"]]
+        unchanged_objects = [obj for obj in push_result if not obj["changed"]]
+
+        self.report({'INFO'}, f"Uploading {len(changed_objects)} changed objects...")
+
+        for obj_data in changed_objects:
+            name = obj_data["object_name"]
+            object_id = str(uuid4())
+
+            try:
+                # Upload JSON metadata via the storage endpoint
+                json_bytes = json.dumps(obj_data["metadata"], indent=2).encode("utf-8")
+
+                import io
+                files = {"json_file": ("metadata.json", io.BytesIO(json_bytes), "application/json")}
+                if obj_data["mesh_binary"]:
+                    files["mesh_file"] = ("mesh.bin", io.BytesIO(obj_data["mesh_binary"]), "application/octet-stream")
+
+                upload_resp = requests.post(
+                    f"{api_base}/api/projects/{prefs.project_id}/objects/stage-upload",
+                    params={
+                        "object_name": name,
+                        "object_type": obj_data["object_type"],
+                        "blob_hash": obj_data["blob_hash"],
+                    },
+                    files=files,
+                    headers=headers,
+                    timeout=30,
+                )
+                upload_resp.raise_for_status()
+                upload_data = upload_resp.json()
+
+                upload_results[name] = {
+                    "json_data_path": upload_data.get("json_path", ""),
+                    "mesh_data_path": upload_data.get("mesh_path"),
+                    "blob_hash": obj_data["blob_hash"],
+                }
+            except Exception as e:
+                logger.error(f"Failed to upload object {name}: {e}")
+                self.report({'ERROR'}, f"Failed to upload {name}: {e}")
+                return {'CANCELLED'}
+
+        # Build the full commit objects list (changed + unchanged)
+        commit_objects = build_commit_objects_list(push_result, upload_results)
+
+        # ── Create commit in database ────────────────────────────────────
+        try:
             commit_payload = {
                 "branch_id": main_branch["branch_id"],
-                "author_id": user["user_id"],
                 "commit_message": pending_commit["message"],
-                "objects": objects_data
+                "objects": commit_objects,
             }
 
             self.report({'INFO'}, "Creating commit in database...")
             commit_resp = requests.post(
-                f"{prefs.api_url}/api/projects/{prefs.project_id}/commits",
+                f"{api_base}/api/projects/{prefs.project_id}/commits",
                 json=commit_payload,
                 headers=headers,
-                timeout=10
+                timeout=15,
             )
             commit_resp.raise_for_status()
             commit_data = commit_resp.json()
-
-            # Success! Update UI state
-            wm["bvcs_last_pushed"] = {
-                "folder": s3_folder_name,
-                "bucket": bucket,
-                "commit_id": commit_data.get("commit_id"),
-                "commit_hash": commit_data.get("commit_hash"),
-                "pushed_at": datetime.now(timezone.utc).isoformat()
-            }
-            wm["bvcs_last_synced_commit_hash"] = commit_data.get("commit_hash") or ""
-            if "bvcs_push_conflict" in wm:
-                del wm["bvcs_push_conflict"]
-            if "bvcs_push_conflict_compare" in wm:
-                del wm["bvcs_push_conflict_compare"]
-
-            # Clear pending commit
-            if "bvcs_pending_commit" in wm:
-                del wm["bvcs_pending_commit"]
-
-            _refresh_project_blend_file_cache(context, prefs)
-            wm.bvcs_project_file = "NONE"
-
-            logger.info(f"Pushed to s3://{bucket}/{s3_folder_name} and DB commit {commit_data.get('commit_hash')}")
-            self.report({'INFO'}, f"Successfully pushed to S3 and database!")
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to create commit in database: {e}")
-            self.report({'ERROR'}, f"Database error: {e}")
-            return {'CANCELLED'}
         except Exception as e:
-            logger.error(f"Failed to push: {e}")
-            self.report({'ERROR'}, f"Push failed: {e}")
+            logger.error(f"Failed to create commit: {e}")
+            self.report({'ERROR'}, f"Commit creation failed: {e}")
             return {'CANCELLED'}
+
+        # ── Update UI state ──────────────────────────────────────────────
+        wm["bvcs_last_pushed"] = {
+            "commit_id": commit_data.get("commit_id"),
+            "commit_hash": commit_data.get("commit_hash"),
+            "pushed_at": datetime.now(timezone.utc).isoformat(),
+            "objects_uploaded": len(changed_objects),
+            "objects_reused": len(unchanged_objects),
+        }
+        wm["bvcs_last_synced_commit_hash"] = commit_data.get("commit_hash") or ""
+        if "bvcs_push_conflict" in wm:
+            del wm["bvcs_push_conflict"]
+        if "bvcs_push_conflict_compare" in wm:
+            del wm["bvcs_push_conflict_compare"]
+        if "bvcs_pending_commit" in wm:
+            del wm["bvcs_pending_commit"]
+
+        # Clear staging area after successful push
+        _staging_area.clear()
+
+        _refresh_project_blend_file_cache(context, prefs)
+
+        logger.info(
+            f"Pushed {len(changed_objects)} new + {len(unchanged_objects)} reused objects, "
+            f"commit {commit_data.get('commit_hash')}"
+        )
+        self.report(
+            {'INFO'},
+            f"Push successful! {len(changed_objects)} uploaded, {len(unchanged_objects)} reused."
+        )
 
         return {'FINISHED'}
 
@@ -1237,22 +1384,140 @@ class BVCS_OT_PullProject(bpy.types.Operator):
             self.report({'ERROR'}, "No project selected")
             return {'CANCELLED'}
 
+        headers = get_auth_headers(prefs)
+        api_base = get_api_base(prefs)
+        project_id = prefs.project_id
+
         try:
-            latest_remote = _get_latest_remote_blend_file_info(prefs)
-            if not latest_remote:
-                self.report({'ERROR'}, "No remote .blend file found for this project")
+            # Fetch latest commit
+            commits_resp = requests.get(
+                f"{api_base}/api/projects/{project_id}/commits",
+                params={"branch_name": "main"},
+                headers=headers,
+                timeout=10,
+            )
+            commits_resp.raise_for_status()
+            commits = commits_resp.json()
+            if not isinstance(commits, list) or not commits:
+                self.report({'ERROR'}, "No commits found for this project")
                 return {'CANCELLED'}
 
-            _open_project_file_info(context, prefs, latest_remote)
-            _refresh_project_blend_file_cache(context, prefs)
-            context.window_manager.bvcs_project_file = "NONE"
+            latest_commit = commits[0]
+            commit_id = latest_commit.get("commit_id")
 
-            short_hash = str(latest_remote.get("commit_hash", ""))[:8]
-            self.report({'INFO'}, f"Pulled latest remote commit {short_hash}")
-            logger.info(f"Pulled latest remote commit {latest_remote.get('commit_hash')}")
+            # Fetch commit objects
+            objects_resp = requests.get(
+                f"{api_base}/api/projects/{project_id}/commits/{commit_id}/objects",
+                headers=headers,
+                timeout=10,
+            )
+            objects_resp.raise_for_status()
+            commit_objects = objects_resp.json()
+
+            if not isinstance(commit_objects, list) or not commit_objects:
+                self.report({'ERROR'}, "No objects in latest commit")
+                return {'CANCELLED'}
+
+            # Check for backward compatibility with BLEND_FILE commits
+            pull_data = prepare_pull_data(commit_objects)
+            legacy_blend = next((obj for obj in pull_data if obj["is_legacy_blend"]), None)
+
+            if legacy_blend:
+                # Fallback: old-style BLEND_FILE commit — download .blend directly
+                logger.info("Legacy BLEND_FILE commit detected, falling back to .blend download")
+                latest_remote = _get_latest_remote_blend_file_info(prefs)
+                if not latest_remote:
+                    self.report({'ERROR'}, "No remote .blend file found")
+                    return {'CANCELLED'}
+                _open_project_file_info(context, prefs, latest_remote)
+            else:
+                # New object-level pull: download JSON + mesh for each object
+                self.report({'INFO'}, f"Downloading {len(pull_data)} objects...")
+
+                objects_data = []
+                mesh_binaries = {}
+
+                for obj_info in pull_data:
+                    name = obj_info["object_name"]
+                    json_path = obj_info["json_data_path"]
+
+                    # Download JSON metadata via presigned URL
+                    try:
+                        url_resp = requests.get(
+                            f"{api_base}/api/projects/{project_id}/objects/download-url",
+                            params={"path": json_path},
+                            headers=headers,
+                            timeout=10,
+                        )
+                        url_resp.raise_for_status()
+                        presigned_url = url_resp.json().get("url")
+                        if presigned_url:
+                            json_resp = requests.get(presigned_url, timeout=15)
+                            json_resp.raise_for_status()
+                            obj_metadata = json_resp.json()
+                        else:
+                            logger.warning(f"No presigned URL for {name}, skipping")
+                            continue
+                    except Exception as e:
+                        logger.error(f"Failed to download metadata for {name}: {e}")
+                        continue
+
+                    objects_data.append(obj_metadata)
+
+                    # Download mesh binary if present
+                    if obj_info["has_mesh"] and obj_info["mesh_data_path"]:
+                        try:
+                            mesh_url_resp = requests.get(
+                                f"{api_base}/api/projects/{project_id}/objects/download-url",
+                                params={"path": obj_info["mesh_data_path"]},
+                                headers=headers,
+                                timeout=10,
+                            )
+                            mesh_url_resp.raise_for_status()
+                            mesh_presigned = mesh_url_resp.json().get("url")
+                            if mesh_presigned:
+                                mesh_resp = requests.get(mesh_presigned, timeout=30)
+                                mesh_resp.raise_for_status()
+                                mesh_binaries[name] = mesh_resp.content
+                        except Exception as e:
+                            logger.error(f"Failed to download mesh for {name}: {e}")
+
+                if objects_data:
+                    # Reconstruct scene from downloaded data
+                    reconstruct_scene(objects_data, mesh_binaries)
+
+                    # Save as .blend locally
+                    local_file = bpy.context.blend_data.filepath
+                    if local_file:
+                        bpy.ops.wm.save_mainfile()
+
+            # Update sync state
+            wm = context.window_manager
+            wm["bvcs_last_pulled"] = {
+                "commit_id": latest_commit.get("commit_id"),
+                "commit_hash": latest_commit.get("commit_hash"),
+                "commit_message": latest_commit.get("commit_message"),
+                "pulled_at": datetime.now(timezone.utc).isoformat(),
+                "object_count": len(pull_data) if not legacy_blend else 1,
+            }
+            wm["bvcs_last_synced_commit_hash"] = latest_commit.get("commit_hash") or ""
+            if "bvcs_push_conflict" in wm:
+                del wm["bvcs_push_conflict"]
+
+            # Rebase pending commit if present
+            pending = wm.get("bvcs_pending_commit")
+            if isinstance(pending, dict):
+                pending["base_commit_hash"] = latest_commit.get("commit_hash") or ""
+                wm["bvcs_pending_commit"] = pending
+
+            _refresh_project_blend_file_cache(context, prefs)
+
+            short_hash = str(latest_commit.get("commit_hash", ""))[:8]
+            self.report({'INFO'}, f"Pulled commit {short_hash} ({len(pull_data)} objects)")
+            logger.info(f"Pulled commit {latest_commit.get('commit_hash')}")
 
         except Exception as e:
-            logger.error(f"Failed to pull latest remote file: {e}")
+            logger.error(f"Failed to pull: {e}")
             self.report({'ERROR'}, f"Pull failed: {e}")
             return {'CANCELLED'}
 
@@ -1418,6 +1683,7 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
     _cached_conflicts = []
     _cached_conflict_items = []
     _cached_conflict_previews = {}
+    _cached_merge_plan = None
 
     conflict_id: bpy.props.EnumProperty(
         name="Conflict",
@@ -1428,8 +1694,9 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
         name="Resolution",
         description="Choose which version to keep",
         items=[
-            ("LOCAL", "Keep Local", "Keep object version from target branch HEAD"),
-            ("INCOMING", "Keep Incoming", "Keep object version from source commit"),
+            ("LOCAL", "Keep Local", "Keep your local version of this object"),
+            ("INCOMING", "Keep Remote", "Keep the remote version of this object"),
+            ("KEEP_BOTH", "Keep Both", "Keep both versions (remote renamed with .remote suffix)"),
         ],
         default="LOCAL"
     )
@@ -1444,14 +1711,12 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
     @staticmethod
     def _summarize_object(obj):
         if not obj:
-            return "missing"
+            return "missing/deleted"
         blob = str(obj.get("blob_hash", ""))[:10]
-        json_path = obj.get("json_data_path", "")
-        if json_path:
-            return f"blob={blob} path={os.path.basename(json_path)}"
-        return f"blob={blob}"
+        return f"blob={blob} type={obj.get('object_type', '?')}"
 
     def _fetch_conflicts(self, prefs):
+        """Fetch server-side conflicts from the API."""
         api_base = get_api_base(prefs)
         headers = get_auth_headers(prefs)
         resp = requests.get(
@@ -1465,6 +1730,41 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
             return []
         return payload
 
+    def _detect_local_conflicts(self, prefs):
+        """Detect object-level conflicts between local scene and remote HEAD."""
+        parent_objects = _get_parent_commit_objects(prefs)
+        if not parent_objects:
+            return None, {}, {}
+
+        # Build hash maps
+        scene_objects_map = {}
+        for obj in bpy.context.scene.objects:
+            meta = serialize_object_metadata(obj)
+            scene_objects_map[obj.name] = compute_object_hash(meta)
+
+        remote_objects_map = {
+            name: data.get("blob_hash", "")
+            for name, data in parent_objects.items()
+        }
+
+        # Use remote as base for now (parent commit)
+        wm = bpy.context.window_manager
+        base_hash = _get_last_synced_commit_hash(wm)
+        remote_hash = _get_latest_remote_commit_hash(prefs)
+
+        if not remote_hash or base_hash == remote_hash:
+            # No remote changes — compute local diff only
+            return None, scene_objects_map, remote_objects_map
+
+        # Three-way merge
+        merge_plan = compute_object_diff(
+            remote_objects_map,  # base (what we last pulled)
+            scene_objects_map,   # local
+            remote_objects_map,  # remote HEAD
+        )
+
+        return merge_plan, scene_objects_map, remote_objects_map
+
     def execute(self, context):
         prefs = get_prefs(context)
         if not prefs.project_id:
@@ -1473,11 +1773,15 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
         if not prefs.auth_token:
             self.report({'ERROR'}, "Not logged in")
             return {'CANCELLED'}
-        if not self.conflict_id:
+        if not self.conflict_id or self.conflict_id == "NONE":
             self.report({'ERROR'}, "No conflict selected")
             return {'CANCELLED'}
 
-        conflict = next((c for c in self.__class__._cached_conflicts if str(c.get("conflict_id")) == self.conflict_id), None)
+        conflict = next(
+            (c for c in self.__class__._cached_conflicts
+             if str(c.get("conflict_id") or c.get("object_name")) == self.conflict_id),
+            None
+        )
         if not conflict:
             self.report({'ERROR'}, "Selected conflict was not found")
             return {'CANCELLED'}
@@ -1486,92 +1790,84 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
             api_base = get_api_base(prefs)
             headers = get_auth_headers(prefs)
             object_name = conflict.get("object_name")
-            source_commit_id = conflict.get("source_commit_id")
-            target_branch_id = conflict.get("target_branch_id")
-            conflict_id = conflict.get("conflict_id")
-            if not object_name or not source_commit_id or not target_branch_id or not conflict_id:
-                self.report({'ERROR'}, "Conflict payload is missing required fields")
-                return {'CANCELLED'}
 
-            # Source side (incoming): object state from source commit.
-            source_resp = requests.get(
-                f"{api_base}/api/projects/{prefs.project_id}/commits/{source_commit_id}/objects",
-                headers=headers,
-                timeout=10
-            )
-            source_resp.raise_for_status()
-            source_objects = source_resp.json()
-            source_obj = self._find_object(source_objects, object_name)
+            # Server-side conflict resolution
+            if conflict.get("conflict_id"):
+                conflict_id = conflict["conflict_id"]
+                source_commit_id = conflict.get("source_commit_id")
+                target_branch_id = conflict.get("target_branch_id")
 
-            # Local side: object state from target branch HEAD commit.
-            branches_resp = requests.get(
-                f"{api_base}/api/projects/{prefs.project_id}/branches",
-                headers=headers,
-                timeout=10
-            )
-            branches_resp.raise_for_status()
-            branches = branches_resp.json()
-            target_branch = next((b for b in branches if str(b.get("branch_id")) == str(target_branch_id)), None)
-            if not target_branch:
-                self.report({'ERROR'}, "Target branch for this conflict was not found")
-                return {'CANCELLED'}
+                if not object_name or not source_commit_id or not target_branch_id:
+                    self.report({'ERROR'}, "Conflict payload is missing required fields")
+                    return {'CANCELLED'}
 
-            local_obj = None
-            head_commit_id = target_branch.get("head_commit_id")
-            if head_commit_id:
-                local_resp = requests.get(
-                    f"{api_base}/api/projects/{prefs.project_id}/commits/{head_commit_id}/objects",
-                    headers=headers,
-                    timeout=10
+                source_resp = requests.get(
+                    f"{api_base}/api/projects/{prefs.project_id}/commits/{source_commit_id}/objects",
+                    headers=headers, timeout=10
                 )
-                local_resp.raise_for_status()
-                local_objects = local_resp.json()
-                local_obj = self._find_object(local_objects, object_name)
+                source_resp.raise_for_status()
+                source_obj = self._find_object(source_resp.json(), object_name)
 
-            if self.resolution == "LOCAL":
-                chosen_obj = local_obj
+                branches_resp = requests.get(
+                    f"{api_base}/api/projects/{prefs.project_id}/branches",
+                    headers=headers, timeout=10
+                )
+                branches_resp.raise_for_status()
+                target_branch = next(
+                    (b for b in branches_resp.json()
+                     if str(b.get("branch_id")) == str(target_branch_id)), None
+                )
+                if not target_branch:
+                    self.report({'ERROR'}, "Target branch not found")
+                    return {'CANCELLED'}
+
+                local_obj = None
+                head_commit_id = target_branch.get("head_commit_id")
+                if head_commit_id:
+                    local_resp = requests.get(
+                        f"{api_base}/api/projects/{prefs.project_id}/commits/{head_commit_id}/objects",
+                        headers=headers, timeout=10
+                    )
+                    local_resp.raise_for_status()
+                    local_obj = self._find_object(local_resp.json(), object_name)
+
+                chosen_obj = local_obj if self.resolution == "LOCAL" else source_obj
+                if not chosen_obj:
+                    self.report({'ERROR'}, f"Chosen version is missing for '{object_name}'")
+                    return {'CANCELLED'}
+
+                commit_payload = {
+                    "branch_id": str(target_branch_id),
+                    "commit_message": f"Resolve conflict: {object_name} ({self.resolution})",
+                    "objects": [{
+                        "object_name": chosen_obj.get("object_name"),
+                        "object_type": chosen_obj.get("object_type"),
+                        "json_data_path": chosen_obj.get("json_data_path"),
+                        "mesh_data_path": chosen_obj.get("mesh_data_path"),
+                        "parent_object_id": chosen_obj.get("parent_object_id"),
+                        "blob_hash": chosen_obj.get("blob_hash"),
+                    }]
+                }
+
+                create_resp = requests.post(
+                    f"{api_base}/api/projects/{prefs.project_id}/commits",
+                    json=commit_payload, headers=headers, timeout=15
+                )
+                create_resp.raise_for_status()
+                created_commit = create_resp.json()
+
+                resolve_resp = requests.put(
+                    f"{api_base}/api/projects/{prefs.project_id}/conflicts/{conflict_id}",
+                    headers=headers, timeout=10
+                )
+                resolve_resp.raise_for_status()
+
+                short_hash = created_commit.get("commit_hash", "")[:8]
+                self.report({'INFO'}, f"Conflict resolved: '{object_name}' via {self.resolution} (commit {short_hash})")
             else:
-                chosen_obj = source_obj
+                # Local-only conflict (from object-level diff)
+                self.report({'INFO'}, f"Conflict for '{object_name}' noted — resolution: {self.resolution}")
 
-            if not chosen_obj:
-                self.report(
-                    {'ERROR'},
-                    f"Chosen version is missing for '{object_name}'. Try the other resolution option."
-                )
-                return {'CANCELLED'}
-
-            commit_payload = {
-                "branch_id": str(target_branch_id),
-                "commit_message": f"Resolve conflict: {object_name} ({self.resolution})",
-                "objects": [{
-                    "object_name": chosen_obj.get("object_name"),
-                    "object_type": chosen_obj.get("object_type"),
-                    "json_data_path": chosen_obj.get("json_data_path"),
-                    "mesh_data_path": chosen_obj.get("mesh_data_path"),
-                    "parent_object_id": chosen_obj.get("parent_object_id"),
-                    "blob_hash": chosen_obj.get("blob_hash"),
-                }]
-            }
-
-            create_resp = requests.post(
-                f"{api_base}/api/projects/{prefs.project_id}/commits",
-                json=commit_payload,
-                headers=headers,
-                timeout=15
-            )
-            create_resp.raise_for_status()
-            created_commit = create_resp.json()
-
-            resolve_resp = requests.put(
-                f"{api_base}/api/projects/{prefs.project_id}/conflicts/{conflict_id}",
-                headers=headers,
-                timeout=10
-            )
-            resolve_resp.raise_for_status()
-
-            commit_hash = created_commit.get("commit_hash", "")[:8]
-            self.report({'INFO'}, f"Conflict resolved for '{object_name}' via {self.resolution} (commit {commit_hash}...)")
-            logger.info(f"Resolved conflict {conflict_id} for object '{object_name}' using {self.resolution}")
             return {'FINISHED'}
         except Exception as e:
             logger.error(f"Conflict resolution failed: {e}")
@@ -1588,8 +1884,21 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
             return {'CANCELLED'}
 
         try:
+            # Check server-side conflicts
             conflicts = self._fetch_conflicts(prefs)
             unresolved = [c for c in conflicts if not c.get("resolved", False)]
+
+            # Also detect local object-level conflicts
+            merge_plan, scene_map, remote_map = self._detect_local_conflicts(prefs)
+            if merge_plan and merge_plan.conflicts:
+                for mc in merge_plan.conflicts:
+                    unresolved.append({
+                        "object_name": mc["object_name"],
+                        "conflict_type": mc["conflict_type"],
+                        "local_hash": mc.get("local_hash"),
+                        "remote_hash": mc.get("remote_hash"),
+                    })
+
             if not unresolved:
                 self.report({'INFO'}, "No unresolved merge conflicts")
                 self.__class__._cached_conflicts = []
@@ -1598,72 +1907,31 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
 
             self.__class__._cached_conflicts = unresolved
             self.__class__._cached_conflict_previews = {}
-            self.__class__._cached_conflict_items = [
-                (
-                    str(c.get("conflict_id")),
-                    f"{c.get('object_name', 'Unknown Object')} [{c.get('conflict_type', 'UNKNOWN')}]",
-                    f"Source commit: {c.get('source_commit_id')} | Target branch: {c.get('target_branch_id')}"
-                )
-                for c in unresolved
-                if c.get("conflict_id")
-            ]
-
-            api_base = get_api_base(prefs)
-            headers = get_auth_headers(prefs)
-            branches_resp = requests.get(
-                f"{api_base}/api/projects/{prefs.project_id}/branches",
-                headers=headers,
-                timeout=10
-            )
-            branches_resp.raise_for_status()
-            branches = branches_resp.json()
+            self.__class__._cached_conflict_items = []
 
             for c in unresolved:
-                cid = str(c.get("conflict_id", ""))
+                cid = str(c.get("conflict_id") or c.get("object_name", ""))
                 if not cid:
                     continue
-                object_name = c.get("object_name")
-                source_commit_id = c.get("source_commit_id")
-                target_branch_id = c.get("target_branch_id")
-
-                source_obj = None
-                local_obj = None
-
-                if source_commit_id:
-                    source_resp = requests.get(
-                        f"{api_base}/api/projects/{prefs.project_id}/commits/{source_commit_id}/objects",
-                        headers=headers,
-                        timeout=10
-                    )
-                    source_resp.raise_for_status()
-                    source_objects = source_resp.json()
-                    source_obj = self._find_object(source_objects, object_name)
-
-                target_branch = next((b for b in branches if str(b.get("branch_id")) == str(target_branch_id)), None)
-                if target_branch and target_branch.get("head_commit_id"):
-                    local_resp = requests.get(
-                        f"{api_base}/api/projects/{prefs.project_id}/commits/{target_branch.get('head_commit_id')}/objects",
-                        headers=headers,
-                        timeout=10
-                    )
-                    local_resp.raise_for_status()
-                    local_objects = local_resp.json()
-                    local_obj = self._find_object(local_objects, object_name)
+                label = f"{c.get('object_name', 'Unknown')} [{c.get('conflict_type', 'UNKNOWN')}]"
+                desc = f"Local: {str(c.get('local_hash', ''))[:8]} Remote: {str(c.get('remote_hash', ''))[:8]}"
+                self.__class__._cached_conflict_items.append((cid, label, desc))
 
                 self.__class__._cached_conflict_previews[cid] = {
-                    "local": self._summarize_object(local_obj),
-                    "incoming": self._summarize_object(source_obj),
+                    "local": f"hash={str(c.get('local_hash', 'missing'))[:10]}",
+                    "incoming": f"hash={str(c.get('remote_hash', 'missing'))[:10]}",
+                    "type": str(c.get("conflict_type", "")),
                 }
 
             if not self.__class__._cached_conflict_items:
-                self.report({'ERROR'}, "Conflicts returned but no valid conflict IDs were found")
+                self.report({'ERROR'}, "Conflicts found but no valid IDs")
                 return {'CANCELLED'}
 
             self.conflict_id = self.__class__._cached_conflict_items[0][0]
             return context.window_manager.invoke_props_dialog(self, width=680)
         except Exception as e:
-            logger.error(f"Failed to fetch merge conflicts: {e}")
-            self.report({'ERROR'}, f"Failed to fetch merge conflicts: {e}")
+            logger.error(f"Failed to check conflicts: {e}")
+            self.report({'ERROR'}, f"Failed to check conflicts: {e}")
             return {'CANCELLED'}
 
     def draw(self, context):
@@ -1671,9 +1939,57 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
         layout.prop(self, "conflict_id")
         layout.prop(self, "resolution")
         preview = self.__class__._cached_conflict_previews.get(self.conflict_id, {})
+        layout.label(text=f"Type: {preview.get('type', 'unknown')}")
         layout.label(text=f"Local: {preview.get('local', 'unknown')}")
-        layout.label(text=f"Incoming: {preview.get('incoming', 'unknown')}")
-        layout.label(text="Local = target branch HEAD, Incoming = source commit", icon='INFO')
+        layout.label(text=f"Remote: {preview.get('incoming', 'unknown')}")
+        layout.separator()
+        layout.label(text="LOCAL = your version, REMOTE = remote HEAD", icon='INFO')
+        if self.resolution == "KEEP_BOTH":
+            layout.label(text="Remote copy will be renamed with .remote suffix", icon='INFO')
+
+# ---------------- Diff/Status Operator ----------------
+class BVCS_OT_RefreshStatus(bpy.types.Operator):
+    bl_idname = "bvcs.refresh_status"
+    bl_label = "Refresh Object Status"
+
+    _cached_diff = {}
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        if not prefs.project_id or not prefs.auth_token:
+            self.report({'ERROR'}, "Not logged in or no project selected")
+            return {'CANCELLED'}
+
+        try:
+            parent_objects = _get_parent_commit_objects(prefs)
+
+            # Build scene hash map
+            scene_hashes = {}
+            for obj in bpy.context.scene.objects:
+                meta = serialize_object_metadata(obj)
+                scene_hashes[obj.name] = compute_object_hash(meta)
+
+            # Build parent hash map
+            parent_hashes = {
+                name: data.get("blob_hash", "")
+                for name, data in parent_objects.items()
+            }
+
+            diff = compute_scene_diff(scene_hashes, parent_hashes)
+            BVCS_OT_RefreshStatus._cached_diff = diff
+
+            modified = sum(1 for s in diff.values() if s == ObjectStatus.MODIFIED)
+            added = sum(1 for s in diff.values() if s == ObjectStatus.ADDED)
+            deleted = sum(1 for s in diff.values() if s == ObjectStatus.DELETED)
+
+            self.report({'INFO'}, f"Status: {modified} modified, {added} new, {deleted} deleted")
+        except Exception as e:
+            logger.error(f"Status refresh failed: {e}")
+            self.report({'ERROR'}, f"Status refresh failed: {e}")
+            return {'CANCELLED'}
+
+        return {'FINISHED'}
+
 
 # ---------------- Panel ----------------
 class BVCS_PT_Panel(bpy.types.Panel):
@@ -1707,14 +2023,63 @@ class BVCS_PT_Panel(bpy.types.Panel):
 
         if prefs.project_id:
             layout.label(text=f"Project: {prefs.project_id}")
-            layout.operator("bvcs.stage_objects")
+
+            # ── Object Status / Diff ──
+            layout.separator()
+            box = layout.box()
+            box.label(text="Object Status", icon='FILE_REFRESH')
+            box.operator("bvcs.refresh_status", text="Refresh Status")
+
+            diff = BVCS_OT_RefreshStatus._cached_diff
+            if diff:
+                for name, status in sorted(diff.items()):
+                    icon = 'NONE'
+                    if status == ObjectStatus.MODIFIED:
+                        icon = 'FILE_BLEND'
+                    elif status == ObjectStatus.ADDED:
+                        icon = 'ADD'
+                    elif status == ObjectStatus.DELETED:
+                        icon = 'REMOVE'
+                    box.label(text=f"  [{status.value}] {name}", icon=icon)
+            else:
+                box.label(text="  No changes detected")
+
+            # ── Staging Area ──
+            layout.separator()
+            box = layout.box()
+            box.label(text="Staging Area", icon='CHECKBOX_HLT')
+            row = box.row(align=True)
+            row.operator("bvcs.stage_objects", text="Stage Selected")
+            row.operator("bvcs.stage_all", text="Stage All")
+            row.operator("bvcs.unstage_object", text="Unstage")
+
+            staged = _staging_area.get_staged_names()
+            if staged:
+                for name in staged:
+                    status_icon = 'CHECKMARK'
+                    # Show status indicator if available
+                    if name in diff:
+                        st = diff[name]
+                        if st == ObjectStatus.MODIFIED:
+                            status_icon = 'FILE_BLEND'
+                        elif st == ObjectStatus.ADDED:
+                            status_icon = 'ADD'
+                    box.label(text=f"  {name}", icon=status_icon)
+            else:
+                box.label(text="  No objects staged")
+
+            # ── Commit / Push / Pull ──
+            layout.separator()
             layout.operator("bvcs.commit")
             layout.operator("bvcs.push")
             layout.operator("bvcs.pull_project")
+
             row = layout.row(align=True)
             row.prop(context.window_manager, "bvcs_project_file", text="Project Files")
             row.operator("bvcs.load_project_file", text="Load File")
+
             layout.operator("bvcs.check_conflicts")
+
             layout.separator()
             layout.label(text="S3 Config:")
             layout.prop(prefs, "s3_bucket", text="Bucket")
@@ -1723,32 +2088,44 @@ class BVCS_PT_Panel(bpy.types.Panel):
             wm = context.window_manager
             if "bvcs_pending_commit" in wm:
                 layout.separator()
-                layout.label(text="Pending Commit:", icon='INFO')
+                box = layout.box()
+                box.label(text="Pending Commit:", icon='INFO')
                 pending = wm["bvcs_pending_commit"]
-                layout.label(text=f"  {pending.get('message', 'N/A')}", icon='FILE_TICK')
-                layout.label(text="  (Click Push to sync)")
+                box.label(text=f"  {pending.get('message', 'N/A')}", icon='FILE_TICK')
+                staged_count = len(pending.get("staged_objects", []))
+                box.label(text=f"  {staged_count} objects staged")
+                box.label(text="  (Click Push to sync)")
 
             if "bvcs_push_conflict" in wm:
                 conflict = wm["bvcs_push_conflict"]
                 layout.separator()
-                layout.label(text="Push Conflict Detected", icon='ERROR')
-                layout.label(text=f"  Remote: {str(conflict.get('remote_commit_hash', ''))[:8]}...")
-                layout.label(text=f"  Base: {str(conflict.get('base_commit_hash', ''))[:8]}...")
-                layout.operator("bvcs.resolve_merge_conflict", text="Resolve Merge Conflict")
+                box = layout.box()
+                box.label(text="Push Conflict Detected", icon='ERROR')
+                box.label(text=f"  Remote: {str(conflict.get('remote_commit_hash', ''))[:8]}...")
+                conflict_objs = conflict.get("conflict_objects", [])
+                if conflict_objs:
+                    for cname in conflict_objs:
+                        box.label(text=f"    {cname}", icon='ERROR')
+                box.operator("bvcs.resolve_merge_conflict", text="Resolve Merge Conflict")
 
-            # Show last push info if available
+            # Show last push info
             if "bvcs_last_pushed" in wm:
                 layout.separator()
                 layout.label(text="Last Push:")
                 last_push = wm["bvcs_last_pushed"]
                 layout.label(text=f"  Commit: {last_push.get('commit_hash', 'N/A')[:8]}...", icon='CHECKMARK')
+                uploaded = last_push.get("objects_uploaded", "?")
+                reused = last_push.get("objects_reused", "?")
+                layout.label(text=f"  {uploaded} uploaded, {reused} reused")
 
-            # Show last pull info if available
+            # Show last pull info
             if "bvcs_last_pulled" in wm:
                 layout.separator()
                 layout.label(text="Last Pull:")
                 last_pull = wm["bvcs_last_pulled"]
                 layout.label(text=f"  {last_pull.get('commit_message', 'N/A')}", icon='IMPORT')
+                obj_count = last_pull.get("object_count", "?")
+                layout.label(text=f"  {obj_count} objects")
 
 # ---------------- Registration ----------------
 classes = [
@@ -1759,6 +2136,8 @@ classes = [
     BVCS_OT_CreateProject,
     BVCS_OT_SelectProject,
     BVCS_OT_StageObjects,
+    BVCS_OT_StageAll,
+    BVCS_OT_UnstageObject,
     BVCS_OT_Commit,
     BVCS_OT_TestS3,
     BVCS_OT_RefreshS3,
@@ -1767,7 +2146,8 @@ classes = [
     BVCS_OT_LoadProjectFile,
     BVCS_OT_ResolveMergeConflict,
     BVCS_OT_CheckConflicts,
-    BVCS_PT_Panel
+    BVCS_OT_RefreshStatus,
+    BVCS_PT_Panel,
 ]
 
 def register():
