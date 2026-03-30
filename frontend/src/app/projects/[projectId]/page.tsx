@@ -4,7 +4,9 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
-import type { Commit, Project, ProjectMember, Invitation, MemberRole } from "@/lib/projectsApi";
+import CommitItem from "@/components/CommitItem";
+import ObjectTypeIcon from "@/components/ObjectTypeIcon";
+import type { Commit, Project, ProjectMember, Invitation, MemberRole, BlenderObject } from "@/lib/projectsApi";
 import {
   addProjectMember,
   deleteProject,
@@ -17,6 +19,7 @@ import {
   sendInvitation,
   fetchProjectInvitations,
   cancelInvitation,
+  fetchObjectDownloadUrl,
 } from "@/lib/projectsApi";
 import { fetchCurrentUser } from "@/lib/authApi";
 
@@ -37,15 +40,6 @@ async function loadCommitsWithUsers(
     author_username: c.author_id === me.user_id ? me.username : "Unknown User",
   }));
 }
-
-type FileRow = {
-  id: string;
-  name: string;
-  type: "folder" | "file";
-  lastCommit: string;
-  updatedAt: string;
-  s3Path?: string;
-};
 
 const ROLE_COLORS: Record<string, string> = {
   owner: "bg-amber-500/20 text-amber-300 border-amber-500/30",
@@ -72,9 +66,12 @@ export default function ProjectPage() {
   const [commitsError, setCommitsError] = useState("");
   const commitCount = commits.length;
 
-  // Files state
-  const [files, setFiles] = useState<FileRow[]>([]);
-  const [filesLoading, setFilesLoading] = useState(false);
+  // Objects from latest commit
+  const [objects, setObjects] = useState<BlenderObject[]>([]);
+  const [objectsLoading, setObjectsLoading] = useState(false);
+
+  // Per-commit object counts (for commit overlay)
+  const [commitObjectCounts, setCommitObjectCounts] = useState<Record<string, number>>({});
 
   // Collaborators panel state
   const [members, setMembers] = useState<ProjectMember[]>([]);
@@ -117,47 +114,32 @@ export default function ProjectPage() {
     })();
   }, [token]);
 
-  // Load commits and files
+  // Load commits and objects
   useEffect(() => {
     if (!token || !projectId) return;
     const loadAll = async () => {
       setCommitsLoading(true);
       setCommitsError("");
-      setFilesLoading(true);
+      setObjectsLoading(true);
       try {
         const data = await loadCommitsWithUsers(token, projectId);
         setCommits(data);
         if (data.length > 0) {
           const latest = data[0];
-          const objects = await fetchCommitObjects(token, projectId, latest.commit_id);
-          const rows: FileRow[] = objects.map((obj) => {
-            let s3Path: string | undefined;
-            // @ts-ignore
-            if (obj.object_type === "BLEND_FILE" && obj.json_data_path) {
-              // @ts-ignore
-              const raw = obj.json_data_path as string;
-              const prefix = "s3://blender-vcs-prod/";
-              s3Path = raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
-            }
-            return {
-              id: obj.object_id,
-              name: obj.object_name,
-              type: obj.object_type === "COLLECTION" ? "folder" : "file",
-              lastCommit: `"${latest.commit_message}"`,
-              updatedAt: formatCommitDate(latest.committed_at),
-              s3Path,
-            };
-          });
-          setFiles(rows);
+          const objs = await fetchCommitObjects(token, projectId, latest.commit_id);
+          setObjects(objs);
+          // Set count for latest commit
+          setCommitObjectCounts((prev) => ({ ...prev, [latest.commit_id]: objs.length }));
         } else {
-          setFiles([]);
+          setObjects([]);
         }
-      } catch (err: any) {
-        setCommitsError(err?.message || "Failed to load commits.");
-        setFiles([]);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Failed to load commits.";
+        setCommitsError(message);
+        setObjects([]);
       } finally {
         setCommitsLoading(false);
-        setFilesLoading(false);
+        setObjectsLoading(false);
       }
     };
     loadAll();
@@ -195,23 +177,17 @@ export default function ProjectPage() {
       await deleteProject(token, projectId);
       setShowConfirm(false);
       router.replace("/projects");
-    } catch (err: any) {
-      setError(err?.message || "Failed to delete project.");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to delete project.";
+      setError(message);
       setDeleting(false);
     }
   };
 
-  const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL;
-
-  const handleDownloadFile = async (file: FileRow) => {
-    if (!token || !file.s3Path) return;
+  const handleDownloadObject = async (obj: BlenderObject) => {
+    if (!token) return;
     try {
-      const res = await fetch(
-        `${API_BASE}/api/projects/${projectId}/files/download?path=${encodeURIComponent(file.s3Path)}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (!res.ok) return;
-      const data = (await res.json()) as { url: string };
+      const data = await fetchObjectDownloadUrl(token, projectId, obj.json_data_path);
       if (data.url) window.open(data.url, "_blank");
     } catch { }
   };
@@ -232,8 +208,9 @@ export default function ProjectPage() {
       setInvitations((prev) => [result, ...prev]);
       setInviteInput("");
       setInviteMessage(`Invitation sent to ${result.invitee_email}`);
-    } catch (err: any) {
-      setInviteMessage(err?.message || "Failed to send invitation.");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to send invitation.";
+      setInviteMessage(message);
     } finally {
       setSendingInvite(false);
     }
@@ -276,7 +253,7 @@ export default function ProjectPage() {
       </div>
 
       {/* Two-column layout */}
-      <div className="mx-auto flex max-w-7xl gap-5 items-center min-h-[calc(100vh-6rem)]">
+      <div className="mx-auto flex max-w-7xl gap-5 items-start pt-8">
         {/* Left: Main content */}
         <div className="min-w-0 flex-1 space-y-5">
           {/* Header + actions */}
@@ -318,40 +295,64 @@ export default function ProjectPage() {
                   <p className="text-slate-500">No commits yet</p>
                 )}
               </div>
+              {objects.length > 0 && (
+                <div className="flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-800/60 px-2.5 py-1 text-[10px] text-slate-400">
+                  <span>⬡</span>
+                  <span>{objects.length} objects</span>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Files table */}
+          {/* Objects table */}
           <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60 text-xs">
-            <div className="grid grid-cols-4 border-b border-slate-800 bg-slate-950 px-4 py-2 text-[11px] font-medium text-slate-400">
-              <div className="text-left">NAME</div>
-              <div className="text-left">LAST COMMIT</div>
-              <div className="text-right">LAST UPDATED</div>
+            <div className="grid grid-cols-[1fr_auto_1fr_auto] border-b border-slate-800 bg-slate-950 px-4 py-2 text-[11px] font-medium text-slate-400">
+              <div className="text-left">OBJECT</div>
+              <div className="px-4 text-left">TYPE</div>
+              <div className="text-left">BLOB HASH</div>
               <div className="text-right">ACTIONS</div>
             </div>
             <div className="divide-y divide-slate-800">
-              {filesLoading ? (
-                <div className="px-4 py-3 text-xs text-slate-400">Loading files...</div>
-              ) : files.length === 0 ? (
-                <div className="px-4 py-3 text-xs text-slate-500">No files yet for this project.</div>
+              {objectsLoading ? (
+                <div className="px-4 py-3 text-xs text-slate-400">Loading objects...</div>
+              ) : objects.length === 0 ? (
+                <div className="px-4 py-3 text-xs text-slate-500">No objects yet for this project. Push from Blender to add objects.</div>
               ) : (
-                files.map((file) => (
-                  <div key={file.id} className="grid grid-cols-4 items-center px-4 py-2 hover:bg-slate-900">
+                objects.map((obj) => (
+                  <div key={obj.object_id} className="grid grid-cols-[1fr_auto_1fr_auto] items-center px-4 py-2 hover:bg-slate-900/80 transition">
                     <div className="flex items-center gap-2 text-slate-100">
-                      <span className={`flex h-4 w-4 items-center justify-center rounded-sm ${file.type === "folder" ? "bg-yellow-500/20 text-yellow-300" : "bg-slate-700/60 text-slate-300"}`}>
-                        {file.type === "folder" ? "▣" : "▤"}
-                      </span>
-                      <span className="truncate">{file.name}</span>
+                      <span className="truncate font-medium">{obj.object_name}</span>
                     </div>
-                    <div className="truncate text-slate-400">{file.lastCommit}</div>
-                    <div className="text-right text-slate-500">{file.updatedAt}</div>
-                    <div className="text-right">
-                      {file.s3Path ? (
-                        <button type="button" onClick={() => handleDownloadFile(file)} className="rounded border border-sky-500 px-2 py-0.5 text-[11px] text-sky-300 hover:bg-sky-500/10">
-                          Download
+                    <div className="px-4">
+                      <ObjectTypeIcon objectType={obj.object_type} showLabel />
+                    </div>
+                    <div className="font-mono text-[10px] text-slate-500" title={obj.blob_hash}>
+                      {obj.blob_hash.slice(0, 12)}…
+                    </div>
+                    <div className="flex items-center gap-1 justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadObject(obj)}
+                        className="rounded border border-sky-500/50 px-2 py-0.5 text-[10px] text-sky-300 transition hover:bg-sky-500/10"
+                        title="Download JSON metadata"
+                      >
+                        JSON
+                      </button>
+                      {obj.mesh_data_path && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!token || !obj.mesh_data_path) return;
+                            try {
+                              const data = await fetchObjectDownloadUrl(token, projectId, obj.mesh_data_path);
+                              if (data.url) window.open(data.url, "_blank");
+                            } catch { }
+                          }}
+                          className="rounded border border-emerald-500/50 px-2 py-0.5 text-[10px] text-emerald-300 transition hover:bg-emerald-500/10"
+                          title="Download mesh binary"
+                        >
+                          Mesh
                         </button>
-                      ) : (
-                        <span className="text-[11px] text-slate-600">—</span>
                       )}
                     </div>
                   </div>
@@ -539,25 +540,15 @@ export default function ProjectPage() {
               <p className="text-xs text-slate-400">No commits yet for this project.</p>
             )}
             {!commitsLoading && !commitsError && commits.length > 0 && (
-              <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-                {commits.map((c) => {
-                  const date = new Date(c.committed_at);
-                  const formatted = isNaN(date.getTime()) ? c.committed_at : date.toLocaleString();
-                  const shortHash = c.commit_hash.slice(0, 7);
-                  return (
-                    <div key={c.commit_id} className="flex items-start justify-between rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs hover:border-sky-500/60 hover:bg-slate-900">
-                      <div className="flex-1 pr-3">
-                        <p className="font-medium text-slate-100">{c.commit_message || "(no message)"}</p>
-                        <p className="mt-1 text-[11px] text-slate-500">
-                          <span className="inline-flex items-center gap-1">
-                            <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">{shortHash}</span>
-                            <span>{formatted}</span>
-                          </span>
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
+                {commits.map((c) => (
+                  <CommitItem
+                    key={c.commit_id}
+                    commit={c}
+                    projectId={projectId}
+                    objectCount={commitObjectCounts[c.commit_id]}
+                  />
+                ))}
               </div>
             )}
           </div>

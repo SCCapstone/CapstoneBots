@@ -213,7 +213,7 @@ def get_logged_in_user(prefs):
         return None
     headers = {"Authorization": f"Bearer {prefs.auth_token}"}
     try:
-        resp = requests.get(f"{prefs.api_url}/api/auth/me", headers=headers, timeout=5)
+        resp = requests.get(f"{get_api_base(prefs)}/api/auth/me", headers=headers, timeout=5)
         resp.raise_for_status()
         user = resp.json()
         return normalize_user_dict(user)
@@ -228,7 +228,7 @@ def fetch_user_s3_credentials(prefs):
         return
     headers = {"Authorization": f"Bearer {prefs.auth_token}"}
     try:
-        resp = requests.get(f"{prefs.api_url}/api/auth/s3-config", headers=headers, timeout=5)
+        resp = requests.get(f"{get_api_base(prefs)}/api/auth/s3-config", headers=headers, timeout=5)
         resp.raise_for_status()
         s3_data = resp.json()
         prefs.s3_access_key = s3_data.get("access_key", "")
@@ -393,7 +393,7 @@ class BVCS_OT_Login(bpy.types.Operator):
 
     def execute(self, context):
         prefs = get_prefs(context)
-        url = f"{prefs.api_url}/api/auth/login"
+        url = f"{get_api_base(prefs)}/api/auth/login"
         try:
             resp = requests.post(url, json={"email": self.email, "password": self.password}, timeout=5)
             if resp.status_code == 200:
@@ -485,7 +485,7 @@ class BVCS_OT_CreateProject(bpy.types.Operator):
         }
         headers = {"Authorization": f"Bearer {prefs.auth_token}"}
         try:
-            resp = requests.post(f"{prefs.api_url}/api/projects", json=payload, headers=headers, timeout=10)
+            resp = requests.post(f"{get_api_base(prefs)}/api/projects", json=payload, headers=headers, timeout=10)
             resp.raise_for_status()
             project = resp.json()
             proj_id = project.get("project_id") or project.get("id")
@@ -542,7 +542,7 @@ def get_user_projects(context):
 
     headers = {"Authorization": f"Bearer {prefs.auth_token}"}
     try:
-        api_base = prefs.api_url.rstrip("/")
+        api_base = get_api_base(prefs)
         resp = requests.get(f"{api_base}/api/projects", headers=headers, timeout=10)
         resp.raise_for_status()
         payload = resp.json()
@@ -583,7 +583,12 @@ def get_user_projects_for_enum(context):
 
 
 def get_api_base(prefs):
-    return prefs.api_url.rstrip("/")
+    url = prefs.api_url.rstrip("/")
+    # Auto-correct HTTPS→HTTP for localhost connections (local dev never uses SSL)
+    if url.startswith("https://localhost") or url.startswith("https://127.0.0.1"):
+        url = "http://" + url[len("https://"):]
+        logger.warning(f"Auto-corrected HTTPS to HTTP for local dev: {url}")
+    return url
 
 
 def get_auth_headers(prefs):
@@ -1268,12 +1273,6 @@ class BVCS_OT_Push(bpy.types.Operator):
             self.report({'ERROR'}, "Cannot get logged-in user")
             return {'CANCELLED'}
 
-        # First, create the commit to get a commit_hash for S3 paths
-        commit_hash_for_paths = hashlib.sha256(
-            f"{prefs.project_id}{main_branch['branch_id']}{user['user_id']}"
-            f"{pending_commit['message']}{datetime.now(timezone.utc).isoformat()}".encode()
-        ).hexdigest()
-
         upload_results = {}
         changed_objects = [obj for obj in push_result if obj["changed"]]
         unchanged_objects = [obj for obj in push_result if not obj["changed"]]
@@ -1282,7 +1281,6 @@ class BVCS_OT_Push(bpy.types.Operator):
 
         for obj_data in changed_objects:
             name = obj_data["object_name"]
-            object_id = str(uuid4())
 
             try:
                 # Upload JSON metadata via the storage endpoint

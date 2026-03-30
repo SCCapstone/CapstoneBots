@@ -8,7 +8,7 @@ Provides functions to:
 """
 import logging
 
-from blender_vcs.object_serialization import (
+from .object_serialization import (
     serialize_object_metadata,
     serialize_mesh_data,
     compute_object_hash,
