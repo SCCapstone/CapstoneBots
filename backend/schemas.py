@@ -157,21 +157,6 @@ class ObjectLockResponse(ObjectLockBase):
 
     model_config = ConfigDict(from_attributes=True)
 
-# ============== Merge Conflict Schemas ==============
-class MergeConflictBase(BaseModel):
-    object_name: str
-    conflict_type: str
-
-class MergeConflictResponse(MergeConflictBase):
-    conflict_id: UUID
-    project_id: UUID
-    source_commit_id: UUID
-    target_branch_id: UUID
-    resolved: bool
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
 # ============== Project Metadata Schemas ==============
 class ProjectMetadataBase(BaseModel):
     key: str
