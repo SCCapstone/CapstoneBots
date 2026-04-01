@@ -35,6 +35,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _to_utc_naive(dt: datetime | None) -> datetime | None:
+    """Normalize datetimes to UTC-naive for safe comparison with DB timestamp fields."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 @router.post("/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
     """
@@ -504,9 +513,7 @@ async def get_pending_invitations(
 
     response = []
     for inv in invitations:
-        expires = inv.expires_at
-        if expires and expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
+        expires = _to_utc_naive(inv.expires_at)
         if expires and expires < now:
             inv.status = InvitationStatus.expired.value
             continue
@@ -554,9 +561,7 @@ async def accept_invitation(
         raise HTTPException(status_code=400, detail=f"Invitation is already {invitation.status}.")
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    expires = invitation.expires_at
-    if expires and expires.tzinfo is None:
-        expires = expires.replace(tzinfo=timezone.utc)
+    expires = _to_utc_naive(invitation.expires_at)
     if expires and expires < now:
         invitation.status = InvitationStatus.expired.value
         await db.commit()
