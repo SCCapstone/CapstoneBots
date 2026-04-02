@@ -6,14 +6,12 @@ export type Project = {
   name: string;
   description?: string;
   created_at?: string;
-  default_branch?: string;
   updated_at?: string;
 };
 
 export type Commit = {
   commit_id: string;
   project_id: string;
-  branch_id: string;
   parent_commit_id: string | null;
   author_id: string;
   commit_hash: string;
@@ -153,16 +151,12 @@ export async function deleteProject(token: string, id: string): Promise<void> {
 
 export async function fetchCommits(
   token: string,
-  projectId: string,
-  branchName = "main"
+  projectId: string
 ): Promise<Commit[]> {
-  const res = await fetch(
-    `${API_BASE}/api/projects/${projectId}/commits?branch_name=${encodeURIComponent(branchName)}`,
-    {
-      method: "GET",
-      headers: { Authorization: `Bearer ${token}` },
-    }
-  );
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/commits`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}` },
+  });
   if (!res.ok) await handleProjectError(res, "Fetch commits");
   return res.json();
 }

@@ -74,7 +74,6 @@ async def init_db():
 
         # Ensure nullable columns for account deletion (idempotent)
         for stmt in [
-            "ALTER TABLE branches ALTER COLUMN created_by DROP NOT NULL",
             "ALTER TABLE commits ALTER COLUMN author_id DROP NOT NULL",
         ]:
             try:

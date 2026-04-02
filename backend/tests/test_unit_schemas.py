@@ -3,7 +3,7 @@ import pytest
 from uuid import uuid4
 from datetime import datetime, timezone
 
-from schemas import ProjectCreate, BranchCreate, CommitCreateRequest, BlenderObjectCreate
+from schemas import ProjectCreate, CommitCreateRequest, BlenderObjectCreate
 
 
 def test_project_create_defaults():
@@ -13,14 +13,8 @@ def test_project_create_defaults():
     assert p.description is None
 
 
-def test_branch_create_requires_name_or_branch_name():
-    with pytest.raises(Exception):
-        BranchCreate()
-
-
 def test_commit_create_request_requires_objects():
     payload = {
-        "branch_id": str(uuid4()),
         "commit_message": "test commit",
         "objects": [],
     }

@@ -31,7 +31,7 @@ export async function fetchCurrentUser(token: string): Promise<MeResponse> {
 /**
  * Structured error thrown by API helpers.
  * Carries the HTTP status and an optional machine-readable code
- * so callers can branch without parsing human-readable text.
+ * so callers can choose handling paths without parsing human-readable text.
  */
 export class ApiError extends Error {
   status: number;

@@ -72,11 +72,9 @@ class Project(Base):
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
-    default_branch = Column(String, default="main")
     active = Column(Boolean, default=True)
 
     owner = relationship("User", back_populates="projects")
-    branches = relationship("Branch", back_populates="project", cascade="all, delete-orphan")
     commits = relationship("Commit", back_populates="project", cascade="all, delete-orphan")
     locks = relationship("ObjectLock", back_populates="project", cascade="all, delete-orphan")
     conflicts = relationship("MergeConflict", back_populates="project", cascade="all, delete-orphan")
@@ -85,31 +83,11 @@ class Project(Base):
     members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
 
 
-class Branch(Base):
-    __tablename__ = "branches"
-
-    branch_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), nullable=False)
-    branch_name = Column(String, nullable=False)
-    head_commit_id = Column(UUID(as_uuid=True), ForeignKey("commits.commit_id"), nullable=True)
-    parent_branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=True)
-    created_at = Column(DateTime, default=_utcnow)
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
-
-    __table_args__ = (UniqueConstraint("project_id", "branch_name", name="unique_project_branch"),)
-
-    project = relationship("Project", back_populates="branches")
-    head_commit = relationship("Commit", foreign_keys=[head_commit_id])
-    parent_branch = relationship("Branch", remote_side=[branch_id])
-    commits = relationship("Commit", back_populates="branch", foreign_keys="Commit.branch_id")
-
-
 class Commit(Base):
     __tablename__ = "commits"
 
     commit_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), nullable=False)
-    branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=False)
     parent_commit_id = Column(UUID(as_uuid=True), ForeignKey("commits.commit_id"), nullable=True)
     author_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
     commit_message = Column(Text, nullable=False)
@@ -119,7 +97,6 @@ class Commit(Base):
     merge_parent_id = Column(UUID(as_uuid=True), ForeignKey("commits.commit_id"), nullable=True)
 
     project = relationship("Project", back_populates="commits")
-    branch = relationship("Branch", back_populates="commits", foreign_keys=[branch_id])
     author = relationship("User", back_populates="commits")
     parent_commit = relationship("Commit", remote_side=[commit_id], foreign_keys=[parent_commit_id])
     objects = relationship("BlenderObject", back_populates="commit", cascade="all, delete-orphan")
@@ -148,11 +125,10 @@ class ObjectLock(Base):
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), nullable=False)
     object_name = Column(String, nullable=False)
     locked_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
-    branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=False)
     locked_at = Column(DateTime, default=_utcnow)
     expires_at = Column(DateTime, nullable=False)
 
-    __table_args__ = (UniqueConstraint("project_id", "object_name", "branch_id", name="unique_object_lock"),)
+    __table_args__ = (UniqueConstraint("project_id", "object_name", name="unique_object_lock"),)
 
     project = relationship("Project", back_populates="locks")
     locked_by_user = relationship("User", back_populates="locks")
@@ -164,7 +140,7 @@ class MergeConflict(Base):
     conflict_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), nullable=False)
     source_commit_id = Column(UUID(as_uuid=True), ForeignKey("commits.commit_id"), nullable=False)
-    target_branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=False)
+    target_commit_id = Column(UUID(as_uuid=True), ForeignKey("commits.commit_id"), nullable=False)
     object_name = Column(String, nullable=False)
     conflict_type = Column(String, nullable=False)  # MODIFY_MODIFY, DELETE_MODIFY, etc.
     resolved = Column(Boolean, default=False)
@@ -191,7 +167,7 @@ class ProjectMember(Base):
     Junction table for project collaboration.
 
     Enables many-to-many relationship between users and projects.
-    Roles: viewer (read-only), editor (commit/branch), owner (full control).
+    Roles: viewer (read-only), editor (commit), owner (full control).
     """
     __tablename__ = "project_members"
 

@@ -24,7 +24,7 @@ from sqlalchemy.orm import joinedload
 from jose import JWTError
 
 from database import get_db
-from models import User, Project, ProjectMember, ProjectInvitation, ObjectLock, Commit, Branch, MemberRole, InvitationStatus
+from models import User, Project, ProjectMember, ProjectInvitation, ObjectLock, Commit, MemberRole, InvitationStatus
 import schemas
 from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user, create_password_reset_token, decode_password_reset_token, create_email_verification_token, decode_email_verification_token
 from utils.email import send_password_reset_email, send_verification_email
@@ -382,8 +382,7 @@ async def delete_account(
         other_member_count = member_count_result.scalar()
 
         if other_member_count == 0:
-            # Sole member → delete entire project using the shared helper
-            # to avoid ORM circular-dependency between Branch ↔ Commit.
+            # Sole member → delete entire project using the shared helper.
             await delete_project_data(db, project.project_id)
 
             # Expunge the ORM object so SQLAlchemy doesn't try to flush it
@@ -449,14 +448,7 @@ async def delete_account(
     for commit in commits_result.scalars().all():
         commit.author_id = None
 
-    # 7. Anonymize branches created by user in projects user doesn't own
-    branches_result = await db.execute(
-        select(Branch).where(Branch.created_by == user_id)
-    )
-    for branch in branches_result.scalars().all():
-        branch.created_by = None
-
-    # 7b. Delete all invitations sent or received by this user
+    # 7. Delete all invitations sent or received by this user
     invitations_result = await db.execute(
         select(ProjectInvitation).where(
             or_(

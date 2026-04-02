@@ -656,7 +656,6 @@ def _refresh_project_blend_file_cache(context, prefs):
     try:
         commits_resp = requests.get(
             f"{api_base}/api/projects/{project_id}/commits",
-            params={"branch_name": "main"},
             headers=headers,
             timeout=10,
         )
@@ -772,7 +771,6 @@ def _get_latest_remote_blend_file_info(prefs):
 
     commits_resp = requests.get(
         f"{api_base}/api/projects/{project_id}/commits",
-        params={"branch_name": "main"},
         headers=headers,
         timeout=10,
     )
@@ -825,7 +823,7 @@ def _get_latest_remote_blend_file_info(prefs):
 # ---------- remote chronology helpers ----------
 
 def _get_latest_remote_commit_hash(prefs):
-    """Return the hash string of the tip of main branch on the remote (or "").
+    """Return the hash string of the latest remote commit (or "").
 
     This simply delegates to ``_get_latest_remote_blend_file_info`` and pulls
     the commit_hash field.  It is used by synchronization logic to decide if
@@ -1149,18 +1147,8 @@ class BVCS_OT_Push(bpy.types.Operator):
                 self.report({'ERROR'}, "Cannot get logged-in user")
                 return {'CANCELLED'}
 
-            # Step 3: Get main branch ID
             headers = {"Authorization": f"Bearer {prefs.auth_token}"}
-            branches_resp = requests.get(f"{prefs.api_url}/api/projects/{prefs.project_id}/branches",
-                                         headers=headers, timeout=10)
-            branches_resp.raise_for_status()
-            branches = branches_resp.json()
-            main_branch = next((b for b in branches if b.get("branch_name") == "main"), None)
-            if not main_branch:
-                self.report({'ERROR'}, "Main branch not found")
-                return {'CANCELLED'}
-
-            # Step 4: Build S3 paths for objects
+            # Step 3: Build S3 paths for objects
             blend_filename = os.path.basename(local_file_path)
             s3_blend_path = f"s3://{bucket}/{s3_folder_name}/{blend_filename}"
 
@@ -1174,10 +1162,8 @@ class BVCS_OT_Push(bpy.types.Operator):
                 "blob_hash": hashlib.sha256(s3_blend_path.encode()).hexdigest()
             }]
 
-            # Step 5: Create commit in database
+            # Step 4: Create commit in database
             commit_payload = {
-                "branch_id": main_branch["branch_id"],
-                "author_id": user["user_id"],
                 "commit_message": pending_commit["message"],
                 "objects": objects_data
             }
@@ -1428,7 +1414,7 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
         name="Resolution",
         description="Choose which version to keep",
         items=[
-            ("LOCAL", "Keep Local", "Keep object version from target branch HEAD"),
+            ("LOCAL", "Keep Local", "Keep object version from target commit"),
             ("INCOMING", "Keep Incoming", "Keep object version from source commit"),
         ],
         default="LOCAL"
@@ -1487,9 +1473,9 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
             headers = get_auth_headers(prefs)
             object_name = conflict.get("object_name")
             source_commit_id = conflict.get("source_commit_id")
-            target_branch_id = conflict.get("target_branch_id")
+            target_commit_id = conflict.get("target_commit_id")
             conflict_id = conflict.get("conflict_id")
-            if not object_name or not source_commit_id or not target_branch_id or not conflict_id:
+            if not object_name or not source_commit_id or not target_commit_id or not conflict_id:
                 self.report({'ERROR'}, "Conflict payload is missing required fields")
                 return {'CANCELLED'}
 
@@ -1503,30 +1489,16 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
             source_objects = source_resp.json()
             source_obj = self._find_object(source_objects, object_name)
 
-            # Local side: object state from target branch HEAD commit.
-            branches_resp = requests.get(
-                f"{api_base}/api/projects/{prefs.project_id}/branches",
+            # Local side: object state from target commit.
+            local_obj = None
+            local_resp = requests.get(
+                f"{api_base}/api/projects/{prefs.project_id}/commits/{target_commit_id}/objects",
                 headers=headers,
                 timeout=10
             )
-            branches_resp.raise_for_status()
-            branches = branches_resp.json()
-            target_branch = next((b for b in branches if str(b.get("branch_id")) == str(target_branch_id)), None)
-            if not target_branch:
-                self.report({'ERROR'}, "Target branch for this conflict was not found")
-                return {'CANCELLED'}
-
-            local_obj = None
-            head_commit_id = target_branch.get("head_commit_id")
-            if head_commit_id:
-                local_resp = requests.get(
-                    f"{api_base}/api/projects/{prefs.project_id}/commits/{head_commit_id}/objects",
-                    headers=headers,
-                    timeout=10
-                )
-                local_resp.raise_for_status()
-                local_objects = local_resp.json()
-                local_obj = self._find_object(local_objects, object_name)
+            local_resp.raise_for_status()
+            local_objects = local_resp.json()
+            local_obj = self._find_object(local_objects, object_name)
 
             if self.resolution == "LOCAL":
                 chosen_obj = local_obj
@@ -1541,7 +1513,6 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
                 return {'CANCELLED'}
 
             commit_payload = {
-                "branch_id": str(target_branch_id),
                 "commit_message": f"Resolve conflict: {object_name} ({self.resolution})",
                 "objects": [{
                     "object_name": chosen_obj.get("object_name"),
@@ -1602,7 +1573,7 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
                 (
                     str(c.get("conflict_id")),
                     f"{c.get('object_name', 'Unknown Object')} [{c.get('conflict_type', 'UNKNOWN')}]",
-                    f"Source commit: {c.get('source_commit_id')} | Target branch: {c.get('target_branch_id')}"
+                    f"Source commit: {c.get('source_commit_id')} | Target commit: {c.get('target_commit_id')}"
                 )
                 for c in unresolved
                 if c.get("conflict_id")
@@ -1610,13 +1581,6 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
 
             api_base = get_api_base(prefs)
             headers = get_auth_headers(prefs)
-            branches_resp = requests.get(
-                f"{api_base}/api/projects/{prefs.project_id}/branches",
-                headers=headers,
-                timeout=10
-            )
-            branches_resp.raise_for_status()
-            branches = branches_resp.json()
 
             for c in unresolved:
                 cid = str(c.get("conflict_id", ""))
@@ -1624,7 +1588,7 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
                     continue
                 object_name = c.get("object_name")
                 source_commit_id = c.get("source_commit_id")
-                target_branch_id = c.get("target_branch_id")
+                target_commit_id = c.get("target_commit_id")
 
                 source_obj = None
                 local_obj = None
@@ -1639,10 +1603,9 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
                     source_objects = source_resp.json()
                     source_obj = self._find_object(source_objects, object_name)
 
-                target_branch = next((b for b in branches if str(b.get("branch_id")) == str(target_branch_id)), None)
-                if target_branch and target_branch.get("head_commit_id"):
+                if target_commit_id:
                     local_resp = requests.get(
-                        f"{api_base}/api/projects/{prefs.project_id}/commits/{target_branch.get('head_commit_id')}/objects",
+                        f"{api_base}/api/projects/{prefs.project_id}/commits/{target_commit_id}/objects",
                         headers=headers,
                         timeout=10
                     )
@@ -1673,7 +1636,7 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
         preview = self.__class__._cached_conflict_previews.get(self.conflict_id, {})
         layout.label(text=f"Local: {preview.get('local', 'unknown')}")
         layout.label(text=f"Incoming: {preview.get('incoming', 'unknown')}")
-        layout.label(text="Local = target branch HEAD, Incoming = source commit", icon='INFO')
+        layout.label(text="Local = target commit, Incoming = source commit", icon='INFO')
 
 # ---------------- Panel ----------------
 class BVCS_PT_Panel(bpy.types.Panel):

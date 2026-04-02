@@ -8,7 +8,7 @@ import hashlib
 import json
 
 from database import get_db
-from models import User, Branch, Commit, BlenderObject
+from models import User, Commit, BlenderObject
 import schemas
 import auth
 
@@ -89,7 +89,7 @@ async def create_commit(
 ):
     """
     Accepts multipart/form-data:
-    - metadata: JSON string with branch_id, author_id, commit_message, objects[]
+    - metadata: JSON string with project_id, author_id, commit_message, objects[]
     - files: includes *.json and *.glb uploads
     """
     try:
@@ -97,23 +97,27 @@ async def create_commit(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid metadata JSON: {e}")
 
-    branch_id = meta.get("branch_id")
+    project_id = meta.get("project_id")
     author_id = meta.get("author_id")
     commit_message = meta.get("commit_message")
     objects = meta.get("objects", [])
 
-    # Validate branch
-    branch = await db.get(Branch, branch_id)
-    if not branch:
-        raise HTTPException(status_code=404, detail="Branch not found")
+    # Find latest commit in the project for linear parent linkage
+    latest_result = await db.execute(
+        select(Commit)
+        .where(Commit.project_id == project_id)
+        .order_by(Commit.committed_at.desc())
+        .limit(1)
+    )
+    latest_commit = latest_result.scalars().first()
 
     # Create commit
     commit_id = uuid4()
     new_commit = Commit(
         commit_id=commit_id,
         author_id=author_id,
-        branch_id=branch_id,
-        parent_commit_id=branch.head_commit_id,
+        project_id=project_id,
+        parent_commit_id=latest_commit.commit_id if latest_commit else None,
         commit_message=commit_message,
     )
     db.add(new_commit)
@@ -155,9 +159,6 @@ async def create_commit(
             "object_type": obj["object_type"],
             "blob_hash": blob_hash,
         })
-
-    # Update branch head
-    branch.head_commit_id = commit_id
 
     await db.commit()
     return {

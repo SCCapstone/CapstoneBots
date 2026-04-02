@@ -29,7 +29,6 @@ def test_endpoints_exist():
         "/api/health",
         "/api/projects",
         "/api/projects/{project_id}",
-        "/api/projects/{project_id}/branches",
         "/api/projects/{project_id}/commits",
         "/api/auth/register",
         "/api/auth/login",

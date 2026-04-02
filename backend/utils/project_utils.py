@@ -32,10 +32,7 @@ async def delete_project_data(db: AsyncSession, project_id: UUID) -> None:
     # 1. Delete S3 objects linked to this project's blender_objects
     await cleanup_project_s3(db, project_id)
 
-    # 2. Break circular FKs before deleting rows
-    await db.execute(sa_text(
-        "UPDATE branches SET head_commit_id = NULL WHERE project_id = :pid"
-    ), {"pid": pid})
+    # 2. Break self-referential FKs before deleting rows
     await db.execute(sa_text(
         "UPDATE commits SET parent_commit_id = NULL WHERE project_id = :pid"
     ), {"pid": pid})
@@ -53,7 +50,7 @@ async def delete_project_data(db: AsyncSession, project_id: UUID) -> None:
     # 3. Delete remaining child tables that have project_id
     for tbl in [
         "object_locks", "merge_conflicts",
-        "commits", "branches", "project_metadata",
+        "commits", "project_metadata",
         "project_invitations", "project_members",
     ]:
         await db.execute(sa_text(f"DELETE FROM {tbl} WHERE project_id = :pid"), {"pid": pid})
