@@ -49,6 +49,12 @@ def _build_mock_bpy():
 
     bpy.ops.wm = MagicMock()
     bpy.ops.object = MagicMock()
+    bpy.ops.outliner = MagicMock()
+
+    # Scene collection (used by clear_scene and reconstruct_scene)
+    bpy.context.scene.collection.objects = MagicMock()
+    bpy.context.scene.collection.objects.__iter__ = MagicMock(return_value=iter([]))
+    bpy.context.scene.collection.children = MagicMock()
 
     bpy.path.abspath = lambda x: x
     bpy.app.binary_path = "/usr/bin/blender"

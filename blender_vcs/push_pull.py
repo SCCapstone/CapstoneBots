@@ -55,12 +55,13 @@ def prepare_push_objects(
 
         # Serialize metadata
         metadata = serialize_object_metadata(obj)
-        blob_hash = compute_object_hash(metadata)
 
         # Serialize mesh data if applicable
         mesh_binary = None
         if obj_type in MESH_TYPES and obj.data is not None:
             mesh_binary = serialize_mesh_data(obj)
+
+        blob_hash = compute_object_hash(metadata, mesh_binary)
 
         # Check if changed vs parent
         parent_data = parent_objects.get(name, {})
@@ -137,6 +138,30 @@ def build_commit_objects_list(
             })
 
     return objects
+
+
+def build_commit_objects_hash_map(commit_objects: list[dict]) -> dict[str, str]:
+    """
+    Build a mapping of object_name → blob_hash from commit objects.
+
+    This is useful for three-way merge comparisons during pull, where
+    we need hash maps from multiple commits.
+
+    Args:
+        commit_objects: List of object dicts from GET /commits/{id}/objects
+
+    Returns:
+        Dict mapping object_name → blob_hash
+    """
+    result = {}
+    for obj in commit_objects:
+        if not isinstance(obj, dict):
+            continue
+        name = obj.get("object_name")
+        blob_hash = obj.get("blob_hash", "")
+        if name:
+            result[name] = blob_hash
+    return result
 
 
 def prepare_pull_data(commit_objects: list[dict]) -> list[dict]:

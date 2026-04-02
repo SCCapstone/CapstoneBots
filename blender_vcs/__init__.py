@@ -24,6 +24,15 @@ import subprocess
 import sys
 import tempfile
 import webbrowser
+
+if "bpy" in locals():
+    # If the add-on is reloaded, ensure submodules are reloaded too
+    from . import object_serialization, push_pull, diff, staging, merge
+    importlib.reload(object_serialization)
+    importlib.reload(push_pull)
+    importlib.reload(diff)
+    importlib.reload(staging)
+    importlib.reload(merge)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -832,13 +841,26 @@ def _get_latest_remote_blend_file_info(prefs):
 def _get_latest_remote_commit_hash(prefs):
     """Return the hash string of the tip of main branch on the remote (or "").
 
-    This simply delegates to ``_get_latest_remote_blend_file_info`` and pulls
-    the commit_hash field.  It is used by synchronization logic to decide if
-    the local state is still based on the same remote commit.
+    Directly queries the commits API for the latest commit on the main branch.
     """
     try:
-        info = _get_latest_remote_blend_file_info(prefs) or {}
-        return str(info.get("commit_hash") or "")
+        headers = get_auth_headers(prefs)
+        api_base = get_api_base(prefs)
+        project_id = prefs.project_id
+        if not project_id:
+            return ""
+
+        resp = requests.get(
+            f"{api_base}/api/projects/{project_id}/commits",
+            params={"branch_name": "main"},
+            headers=headers,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        commits = resp.json()
+        if not isinstance(commits, list) or not commits:
+            return ""
+        return str(commits[0].get("commit_hash") or "")
     except Exception:
         return ""
 
@@ -944,6 +966,7 @@ from blender_vcs.object_serialization import (
     deserialize_mesh_data,
     reconstruct_object_from_json,
     reconstruct_scene,
+    clear_scene,
 )
 from blender_vcs.staging import StagingArea
 from blender_vcs.diff import compute_scene_diff, ObjectStatus
@@ -952,6 +975,7 @@ from blender_vcs.push_pull import (
     prepare_push_objects,
     build_commit_objects_list,
     prepare_pull_data,
+    build_commit_objects_hash_map,
     MESH_TYPES,
 )
 
@@ -1095,12 +1119,14 @@ class BVCS_OT_Commit(bpy.types.Operator):
             staged_names = _staging_area.get_staged_names()
 
             # Store commit info locally (will be synced to DB when pushed)
+            # NOTE: staged_objects is JSON-serialized because Blender
+            # IDProperties don't reliably round-trip lists of strings.
             context.window_manager["bvcs_pending_commit"] = {
                 "message": self.commit_message,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "file_path": local_file_path,
                 "base_commit_hash": base_commit_hash,
-                "staged_objects": staged_names,
+                "staged_objects_json": json.dumps(staged_names),
             }
 
             self.report({'INFO'}, f"Committed locally: {self.commit_message} ({len(staged_names)} objects)")
@@ -1203,7 +1229,10 @@ class BVCS_OT_Push(bpy.types.Operator):
                 scene_objects_map = {}
                 for obj in bpy.context.scene.objects:
                     meta = serialize_object_metadata(obj)
-                    scene_objects_map[obj.name] = compute_object_hash(meta)
+                    mesh_bin = None
+                    if obj.type in MESH_TYPES and obj.data is not None:
+                        mesh_bin = serialize_mesh_data(obj)
+                    scene_objects_map[obj.name] = compute_object_hash(meta, mesh_bin)
 
                 remote_objects_map = {
                     name: data.get("blob_hash", "")
@@ -1239,7 +1268,24 @@ class BVCS_OT_Push(bpy.types.Operator):
 
         parent_objects = _get_parent_commit_objects(prefs)
         scene_objects = list(bpy.context.scene.objects)
-        staged_names = set(pending_commit.get("staged_objects", []))
+
+        # Decode staged names from JSON string (stored this way because
+        # Blender IDProperties don't reliably round-trip string lists).
+        staged_names = set()
+        staged_json = pending_commit.get("staged_objects_json", "")
+        if staged_json:
+            try:
+                staged_names = set(json.loads(str(staged_json)))
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Could not parse staged_objects_json, treating all objects as staged")
+                staged_names = set()
+        # Backward compat: old commits stored "staged_objects" as a raw list
+        if not staged_names:
+            raw = pending_commit.get("staged_objects", [])
+            try:
+                staged_names = set(str(n) for n in raw if n)
+            except (TypeError, ValueError):
+                staged_names = set()
 
         push_result = prepare_push_objects(
             scene_objects,
@@ -1376,18 +1422,147 @@ class BVCS_OT_PullProject(bpy.types.Operator):
     bl_idname = "bvcs.pull_project"
     bl_label = "Pull Latest from Remote"
 
-    def execute(self, context):
+    # Set to True when the user confirms a dirty-state merge via the dialog
+    _confirmed_dirty_pull: bool = False
+    # Cached merge plan from the dirty-state check (avoids re-computation)
+    _cached_pull_merge_plan = None
+
+    def invoke(self, context, event):
+        """Check local state before pulling. If dirty, show confirmation dialog."""
         prefs = get_prefs(context)
+        wm = context.window_manager
+
         if not prefs.project_id:
             self.report({'ERROR'}, "No project selected")
             return {'CANCELLED'}
+
+        # Determine if local state is dirty
+        has_staged = bool(_staging_area.staged_objects)
+        has_pending = bool(wm.get("bvcs_pending_commit"))
+        is_dirty = has_staged or has_pending
+
+        if not is_dirty:
+            # Clean state — proceed directly
+            self.__class__._confirmed_dirty_pull = False
+            self.__class__._cached_pull_merge_plan = None
+            return self.execute(context)
+
+        # Dirty state — we need to check for merge conflicts before asking
+        try:
+            remote_commit_hash = _get_latest_remote_commit_hash(prefs)
+            synced_hash = _get_last_synced_commit_hash(wm)
+
+            if not remote_commit_hash or remote_commit_hash == synced_hash:
+                # Remote hasn't changed — safe to inform user
+                self.report({'INFO'}, "Already up to date")
+                return {'CANCELLED'}
+
+            # Fetch remote commit objects for merge check
+            headers = get_auth_headers(prefs)
+            api_base = get_api_base(prefs)
+            project_id = prefs.project_id
+
+            commits_resp = requests.get(
+                f"{api_base}/api/projects/{project_id}/commits",
+                params={"branch_name": "main"},
+                headers=headers, timeout=10,
+            )
+            commits_resp.raise_for_status()
+            commits = commits_resp.json()
+            if not isinstance(commits, list) or not commits:
+                self.report({'ERROR'}, "No commits found for this project")
+                return {'CANCELLED'}
+
+            latest_commit = commits[0]
+            commit_id = latest_commit.get("commit_id")
+
+            objects_resp = requests.get(
+                f"{api_base}/api/projects/{project_id}/commits/{commit_id}/objects",
+                headers=headers, timeout=10,
+            )
+            objects_resp.raise_for_status()
+            remote_objects_list = objects_resp.json()
+            if not isinstance(remote_objects_list, list):
+                remote_objects_list = []
+
+            # Build hash maps for three-way merge
+            remote_hash_map = build_commit_objects_hash_map(remote_objects_list)
+
+            # Use the synced commit's objects as the base (common ancestor)
+            base_hash_map = remote_hash_map  # Approximate — see plan
+
+            # Build local scene hash map
+            scene_hash_map = {}
+            for obj in bpy.context.scene.objects:
+                meta = serialize_object_metadata(obj)
+                mesh_bin = None
+                if obj.type in MESH_TYPES and obj.data is not None:
+                    mesh_bin = serialize_mesh_data(obj)
+                scene_hash_map[obj.name] = compute_object_hash(meta, mesh_bin)
+
+            merge_plan = compute_object_diff(
+                base_hash_map,
+                scene_hash_map,
+                remote_hash_map,
+            )
+            self.__class__._cached_pull_merge_plan = merge_plan
+
+            if merge_plan.conflicts:
+                # Block pull — conflicts found
+                conflict_names = [c["object_name"] for c in merge_plan.conflicts]
+                wm["bvcs_push_conflict"] = {
+                    "base_commit_hash": synced_hash,
+                    "remote_commit_hash": remote_commit_hash,
+                    "conflict_objects": conflict_names,
+                    "detected_at": datetime.now(timezone.utc).isoformat(),
+                }
+                self.report(
+                    {'ERROR'},
+                    f"Pull blocked: merge conflicts on {', '.join(conflict_names)}. "
+                    f"Resolve conflicts before pulling."
+                )
+                return {'CANCELLED'}
+
+            # No conflicts — show confirmation dialog
+            self.__class__._confirmed_dirty_pull = False
+            return context.window_manager.invoke_confirm(self, event)
+
+        except Exception as e:
+            logger.error(f"Pull pre-check failed: {e}")
+            self.report({'ERROR'}, f"Pull pre-check failed: {e}")
+            return {'CANCELLED'}
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        wm = context.window_manager
+
+        if not prefs.project_id:
+            self.report({'ERROR'}, "No project selected")
+            return {'CANCELLED'}
+
+        # Determine if local state is dirty
+        has_staged = bool(_staging_area.staged_objects)
+        has_pending = bool(wm.get("bvcs_pending_commit"))
+        is_dirty = has_staged or has_pending
 
         headers = get_auth_headers(prefs)
         api_base = get_api_base(prefs)
         project_id = prefs.project_id
 
         try:
-            # Fetch latest commit
+            # ── Already-up-to-date check ─────────────────────────────────
+            remote_commit_hash = _get_latest_remote_commit_hash(prefs)
+            synced_hash = _get_last_synced_commit_hash(wm)
+
+            if not remote_commit_hash:
+                self.report({'ERROR'}, "No remote commits found")
+                return {'CANCELLED'}
+
+            if remote_commit_hash == synced_hash:
+                self.report({'INFO'}, "Already up to date")
+                return {'FINISHED'}
+
+            # ── Fetch latest commit ──────────────────────────────────────
             commits_resp = requests.get(
                 f"{api_base}/api/projects/{project_id}/commits",
                 params={"branch_name": "main"},
@@ -1429,7 +1604,10 @@ class BVCS_OT_PullProject(bpy.types.Operator):
                     return {'CANCELLED'}
                 _open_project_file_info(context, prefs, latest_remote)
             else:
-                # New object-level pull: download JSON + mesh for each object
+                # ── Object-level pull ────────────────────────────────────
+                # Decide whether to clear the scene (full replace) or merge
+                should_clear = not is_dirty
+
                 self.report({'INFO'}, f"Downloading {len(pull_data)} objects...")
 
                 objects_data = []
@@ -1481,16 +1659,16 @@ class BVCS_OT_PullProject(bpy.types.Operator):
                             logger.error(f"Failed to download mesh for {name}: {e}")
 
                 if objects_data:
-                    # Reconstruct scene from downloaded data
-                    reconstruct_scene(objects_data, mesh_binaries)
+                    # Reconstruct scene — clear first if clean state
+                    reconstruct_scene(objects_data, mesh_binaries,
+                                      clear_existing=should_clear)
 
                     # Save as .blend locally
                     local_file = bpy.context.blend_data.filepath
                     if local_file:
                         bpy.ops.wm.save_mainfile()
 
-            # Update sync state
-            wm = context.window_manager
+            # ── Update sync state ────────────────────────────────────────
             wm["bvcs_last_pulled"] = {
                 "commit_id": latest_commit.get("commit_id"),
                 "commit_hash": latest_commit.get("commit_hash"),
@@ -1501,18 +1679,25 @@ class BVCS_OT_PullProject(bpy.types.Operator):
             wm["bvcs_last_synced_commit_hash"] = latest_commit.get("commit_hash") or ""
             if "bvcs_push_conflict" in wm:
                 del wm["bvcs_push_conflict"]
+            if "bvcs_push_conflict_compare" in wm:
+                del wm["bvcs_push_conflict_compare"]
 
-            # Rebase pending commit if present
-            pending = wm.get("bvcs_pending_commit")
-            if isinstance(pending, dict):
-                pending["base_commit_hash"] = latest_commit.get("commit_hash") or ""
-                wm["bvcs_pending_commit"] = pending
+            # If dirty pull succeeded, rebase the pending commit
+            if is_dirty:
+                pending = wm.get("bvcs_pending_commit")
+                if isinstance(pending, dict):
+                    pending["base_commit_hash"] = latest_commit.get("commit_hash") or ""
+                    wm["bvcs_pending_commit"] = pending
+
+            # Clear the cached merge plan
+            self.__class__._cached_pull_merge_plan = None
 
             _refresh_project_blend_file_cache(context, prefs)
 
             short_hash = str(latest_commit.get("commit_hash", ""))[:8]
-            self.report({'INFO'}, f"Pulled commit {short_hash} ({len(pull_data)} objects)")
-            logger.info(f"Pulled commit {latest_commit.get('commit_hash')}")
+            action = "merged" if is_dirty else "replaced scene with"
+            self.report({'INFO'}, f"Pulled: {action} commit {short_hash} ({len(pull_data)} objects)")
+            logger.info(f"Pulled commit {latest_commit.get('commit_hash')} (dirty={is_dirty})")
 
         except Exception as e:
             logger.error(f"Failed to pull: {e}")
@@ -1738,7 +1923,10 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
         scene_objects_map = {}
         for obj in bpy.context.scene.objects:
             meta = serialize_object_metadata(obj)
-            scene_objects_map[obj.name] = compute_object_hash(meta)
+            mesh_bin = None
+            if obj.type in MESH_TYPES and obj.data is not None:
+                mesh_bin = serialize_mesh_data(obj)
+            scene_objects_map[obj.name] = compute_object_hash(meta, mesh_bin)
 
         remote_objects_map = {
             name: data.get("blob_hash", "")
@@ -1965,7 +2153,10 @@ class BVCS_OT_RefreshStatus(bpy.types.Operator):
             scene_hashes = {}
             for obj in bpy.context.scene.objects:
                 meta = serialize_object_metadata(obj)
-                scene_hashes[obj.name] = compute_object_hash(meta)
+                mesh_bin = None
+                if obj.type in MESH_TYPES and obj.data is not None:
+                    mesh_bin = serialize_mesh_data(obj)
+                scene_hashes[obj.name] = compute_object_hash(meta, mesh_bin)
 
             # Build parent hash map
             parent_hashes = {

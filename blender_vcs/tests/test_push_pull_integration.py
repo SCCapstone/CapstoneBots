@@ -230,3 +230,253 @@ class TestPreparePullData:
 
         assert len(result) == 1
         assert result[0]["is_legacy_blend"] is True
+
+
+class TestBuildCommitObjectsHashMap:
+    """Tests for build_commit_objects_hash_map helper."""
+
+    def test_builds_hash_map_from_commit_objects(self):
+        """Commit objects list → {name: blob_hash} mapping."""
+        from blender_vcs.push_pull import build_commit_objects_hash_map
+
+        commit_objects = [
+            {"object_name": "Cube", "object_type": "MESH", "blob_hash": "aaa"},
+            {"object_name": "Camera", "object_type": "CAMERA", "blob_hash": "bbb"},
+            {"object_name": "Light", "object_type": "LIGHT", "blob_hash": "ccc"},
+        ]
+
+        result = build_commit_objects_hash_map(commit_objects)
+
+        assert result == {"Cube": "aaa", "Camera": "bbb", "Light": "ccc"}
+
+    def test_handles_empty_list(self):
+        from blender_vcs.push_pull import build_commit_objects_hash_map
+
+        assert build_commit_objects_hash_map([]) == {}
+
+    def test_skips_invalid_entries(self):
+        from blender_vcs.push_pull import build_commit_objects_hash_map
+
+        commit_objects = [
+            {"object_name": "Cube", "blob_hash": "aaa"},
+            "not a dict",
+            {"blob_hash": "bbb"},  # missing object_name
+            None,
+        ]
+
+        result = build_commit_objects_hash_map(commit_objects)
+
+        assert result == {"Cube": "aaa"}
+
+    def test_default_empty_hash_for_missing_blob_hash(self):
+        from blender_vcs.push_pull import build_commit_objects_hash_map
+
+        commit_objects = [
+            {"object_name": "Cube"},
+        ]
+
+        result = build_commit_objects_hash_map(commit_objects)
+
+        assert result == {"Cube": ""}
+
+
+class TestReconstructSceneClearExisting:
+    """Tests for reconstruct_scene with clear_existing parameter."""
+
+    def test_clear_existing_calls_clear_scene(self):
+        """When clear_existing=True, clear_scene() should be called."""
+        from unittest.mock import patch
+        from blender_vcs.object_serialization import reconstruct_scene
+
+        objects_data = [
+            {
+                "object_name": "Cube",
+                "object_type": "MESH",
+                "transform": {"location": [0, 0, 0], "rotation_euler": [0, 0, 0], "scale": [1, 1, 1]},
+                "visibility": {},
+                "materials": [],
+                "modifiers": [],
+                "custom_properties": {},
+                "collections": [],
+            },
+        ]
+
+        with patch("blender_vcs.object_serialization.clear_scene") as mock_clear:
+            reconstruct_scene(objects_data, {}, clear_existing=True)
+            mock_clear.assert_called_once()
+
+    def test_no_clear_by_default(self):
+        """When clear_existing is not set (default False), clear_scene() should NOT be called."""
+        from unittest.mock import patch
+        from blender_vcs.object_serialization import reconstruct_scene
+
+        objects_data = [
+            {
+                "object_name": "Camera",
+                "object_type": "CAMERA",
+                "transform": {"location": [0, 0, 0], "rotation_euler": [0, 0, 0], "scale": [1, 1, 1]},
+                "visibility": {},
+                "materials": [],
+                "modifiers": [],
+                "custom_properties": {},
+                "collections": [],
+                "type_data": {"lens": 50, "clip_start": 0.1, "clip_end": 1000, "sensor_width": 36, "camera_type": "PERSP"},
+            },
+        ]
+
+        with patch("blender_vcs.object_serialization.clear_scene") as mock_clear:
+            reconstruct_scene(objects_data, {}, clear_existing=False)
+            mock_clear.assert_not_called()
+
+
+class TestPushDetectsPropertyChanges:
+    """Verify that material, modifier, and transform changes produce different hashes."""
+
+    def test_material_change_detected(self):
+        """Changing a material's diffuse_color → different blob_hash."""
+        scene = _make_scene_objects()
+        cube = scene[0]
+
+        # First push
+        first_result = prepare_push_objects(scene, parent_objects={})
+        parent_objects = {
+            obj["object_name"]: {
+                "blob_hash": obj["blob_hash"],
+                "json_data_path": f"projects/test/objects/{obj['object_name']}/abc.json",
+                "mesh_data_path": obj.get("mesh_data_path"),
+            }
+            for obj in first_result
+        }
+
+        # Add a material to the cube
+        mat = MagicMock()
+        mat.name = "Red"
+        mat.diffuse_color = [1.0, 0.0, 0.0, 1.0]
+        mat.metallic = 0.5
+        mat.roughness = 0.3
+        mat.blend_method = "OPAQUE"
+        mat.use_nodes = False
+        mat.node_tree = None
+        slot = MagicMock()
+        slot.material = mat
+        slot.link = "OBJECT"
+        cube.material_slots = [slot]
+
+        second_result = prepare_push_objects(scene, parent_objects)
+        cube_result = next(o for o in second_result if o["object_name"] == "Cube")
+        assert cube_result["changed"] is True
+
+    def test_modifier_change_detected(self):
+        """Adding a modifier → different blob_hash."""
+        from blender_vcs.tests.conftest import MockModifier
+        scene = _make_scene_objects()
+        cube = scene[0]
+
+        first_result = prepare_push_objects(scene, parent_objects={})
+        parent_objects = {
+            obj["object_name"]: {
+                "blob_hash": obj["blob_hash"],
+                "json_data_path": f"projects/test/objects/{obj['object_name']}/abc.json",
+                "mesh_data_path": obj.get("mesh_data_path"),
+            }
+            for obj in first_result
+        }
+
+        # Add a modifier
+        cube.modifiers = [MockModifier("Subsurf", "SUBSURF")]
+
+        second_result = prepare_push_objects(scene, parent_objects)
+        cube_result = next(o for o in second_result if o["object_name"] == "Cube")
+        assert cube_result["changed"] is True
+
+    def test_transform_change_detected(self):
+        """Changing location/rotation/scale → different blob_hash."""
+        from blender_vcs.tests.conftest import MockVector
+        scene = _make_scene_objects()
+        cube = scene[0]
+
+        first_result = prepare_push_objects(scene, parent_objects={})
+        parent_objects = {
+            obj["object_name"]: {
+                "blob_hash": obj["blob_hash"],
+                "json_data_path": f"projects/test/objects/{obj['object_name']}/abc.json",
+                "mesh_data_path": obj.get("mesh_data_path"),
+            }
+            for obj in first_result
+        }
+
+        # Change scale
+        cube.scale = MockVector([2.0, 2.0, 2.0])
+
+        second_result = prepare_push_objects(scene, parent_objects)
+        cube_result = next(o for o in second_result if o["object_name"] == "Cube")
+        assert cube_result["changed"] is True
+
+
+class TestReconstructSceneRemovesExisting:
+    """Verify that reconstruct_scene replaces existing objects instead of duplicating."""
+
+    def test_dirty_pull_removes_matching_objects_before_creating(self):
+        """When clear_existing=False, objects with matching names are removed first."""
+        from unittest.mock import patch, call
+        from blender_vcs.object_serialization import reconstruct_scene
+
+        objects_data = [
+            {
+                "object_name": "Cube",
+                "object_type": "MESH",
+                "transform": {"location": [0, 0, 0], "rotation_euler": [0, 0, 0], "scale": [1, 1, 1]},
+                "visibility": {},
+                "materials": [],
+                "modifiers": [],
+                "custom_properties": {},
+                "collections": [],
+            },
+        ]
+
+        # Simulate an existing object named "Cube" in bpy.data.objects
+        existing_obj = MagicMock()
+        existing_obj.name = "Cube"
+
+        import bpy
+        bpy.data.objects.__iter__ = MagicMock(return_value=iter([existing_obj]))
+
+        with patch("blender_vcs.object_serialization.clear_scene") as mock_clear:
+            reconstruct_scene(objects_data, {}, clear_existing=False)
+            # clear_scene should NOT be called
+            mock_clear.assert_not_called()
+            # But the existing "Cube" should have been removed
+            bpy.data.objects.remove.assert_called_with(existing_obj, do_unlink=True)
+
+
+class TestPullDirtyStateDetection:
+    """Tests that the pull operator properly detects dirty local state."""
+
+    def test_staging_area_is_dirty_when_objects_staged(self):
+        """Staging area with objects → dirty state."""
+        from blender_vcs.staging import StagingArea
+
+        staging = StagingArea()
+        staging.stage("Cube")
+
+        assert bool(staging.staged_objects) is True
+
+    def test_staging_area_is_clean_when_empty(self):
+        """Empty staging area → clean state."""
+        from blender_vcs.staging import StagingArea
+
+        staging = StagingArea()
+
+        assert bool(staging.staged_objects) is False
+
+    def test_staging_area_clean_after_clear(self):
+        """Staging area after clear() → clean state."""
+        from blender_vcs.staging import StagingArea
+
+        staging = StagingArea()
+        staging.stage("Cube")
+        staging.stage("Camera")
+        staging.clear()
+
+        assert bool(staging.staged_objects) is False
+
