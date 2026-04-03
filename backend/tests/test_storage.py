@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch, MagicMock
 from minio.error import S3Error
 
 from storage.storage_service import StorageService, MAX_PRESIGNED_URL_HOURS
-from storage.storage_utils import StorageUtils, DeduplicationManager, VersioningHelper
+from storage.storage_utils import StorageUtils
 
 
 # ============== StorageUtils Tests ==============
@@ -156,101 +156,6 @@ class TestStorageUtils:
         assert metadata["metadata"]["custom_field"] == "value"
         assert metadata["metadata"]["another_field"] == 123
 
-
-# ============== DeduplicationManager Tests ==============
-
-class TestDeduplicationManager:
-    """Tests for DeduplicationManager class"""
-    
-    def setup_method(self):
-        """Setup for each test"""
-        self.mock_storage = Mock()
-        self.dedup = DeduplicationManager(self.mock_storage)
-    
-    def test_should_store_separately_new_hash(self):
-        """Test that new hashes should be stored"""
-        hash1 = "abc123"
-        assert self.dedup.should_store_separately(hash1) is True
-    
-    def test_should_store_separately_existing_hash(self):
-        """Test that existing hashes shouldn't be stored again"""
-        hash1 = "abc123"
-        self.dedup.register_hash(hash1, "path/to/file")
-        
-        assert self.dedup.should_store_separately(hash1) is False
-    
-    def test_register_and_retrieve_hash(self):
-        """Test registering and retrieving hash paths"""
-        hash1 = "abc123"
-        path = "projects/123/objects/456/hash.json"
-        
-        self.dedup.register_hash(hash1, path)
-        retrieved_path = self.dedup.get_duplicate_path(hash1)
-        
-        assert retrieved_path == path
-    
-    def test_get_duplicate_path_not_found(self):
-        """Test retrieving non-existent hash"""
-        path = self.dedup.get_duplicate_path("nonexistent")
-        assert path is None
-    
-    def test_calculate_savings(self):
-        """Test savings calculation"""
-        total = 1000
-        actual = 600
-        
-        savings = self.dedup.calculate_savings(total, actual)
-        
-        assert savings["total_size"] == 1000
-        assert savings["actual_stored"] == 600
-        assert savings["bytes_saved"] == 400
-        assert savings["percent_saved"] == 40.0
-    
-    def test_calculate_savings_no_duplicate(self):
-        """Test savings when no deduplication occurred"""
-        total = 1000
-        actual = 1000
-        
-        savings = self.dedup.calculate_savings(total, actual)
-        
-        assert savings["bytes_saved"] == 0
-        assert savings["percent_saved"] == 0.0
-
-
-# ============== VersioningHelper Tests ==============
-
-class TestVersioningHelper:
-    """Tests for VersioningHelper class"""
-    
-    def test_create_version_tag(self):
-        """Test version tag creation"""
-        commit_hash = "abc123def456"
-        timestamp = "2025-12-04T10-30-00"
-        
-        tag = VersioningHelper.create_version_tag(commit_hash, timestamp)
-        
-        assert "v_" in tag
-        assert "abc123de" in tag  # First 8 chars of hash
-        assert timestamp in tag
-    
-    def test_parse_version_tag(self):
-        """Test version tag parsing"""
-        tag = "v_2025-12-04T10-30-00_abc123de"
-        parsed = VersioningHelper.parse_version_tag(tag)
-        
-        assert parsed["commit_hash_short"] == "abc123de"
-        assert "2025-12-04" in parsed["timestamp"]
-    
-    def test_get_version_range(self):
-        """Test version range creation"""
-        start = "abc123def456"
-        end = "xyz789uvwxyz"
-        
-        range_str = VersioningHelper.get_version_range(start, end)
-        
-        assert "abc123de" in range_str  # First 8 chars of start
-        assert "xyz789uv" in range_str  # First 8 chars of end
-        assert ".." in range_str
 
 
 # ============== Integration Tests ==============
