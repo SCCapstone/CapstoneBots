@@ -377,7 +377,7 @@ async def create_commit(
             expires = lock.expires_at
             # Ensure both sides are naive-UTC for comparison
             if expires.tzinfo is not None:
-                expires = expires.replace(tzinfo=None)
+                expires = expires.astimezone(timezone.utc).replace(tzinfo=None)
             if expires < now:
                 await db.delete(lock)
                 await db.flush()
