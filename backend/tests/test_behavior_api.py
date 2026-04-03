@@ -148,7 +148,7 @@ class TestProjectCRUD:
             headers=auth_header(token),
         )
         # Should be rejected (400 or 422) depending on backend validation
-        assert r.status_code in (400, 422) or r.status_code == 201
+        assert r.status_code in (400, 422)
 
     def test_get_nonexistent_project(self, client):
         _, token, _, _ = register_and_login(client)
