@@ -13,95 +13,23 @@ Requires a running PostgreSQL database.
 Run with: docker compose up -d db && cd backend && pytest tests/test_authorization.py -v
 """
 
-import os
-import sys
 import pytest
 from uuid import uuid4
-import importlib.util
 
-# Ensure app root is on sys.path
-root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if root not in sys.path:
-    sys.path.insert(0, root)
-
-os.environ.setdefault("JWT_SECRET", "test-secret-for-auth-tests")
-
-from fastapi.testclient import TestClient
-
-# Load the FastAPI app
-spec = importlib.util.spec_from_file_location("main", os.path.join(root, "main.py"))
-main = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(main)
-app = main.app
-
-from utils.auth import create_email_verification_token
-
-
-# --------------- DB availability check ---------------
-
-def _db_available():
-    try:
-        with TestClient(app) as c:
-            r = c.get("/api/health")
-            return r.status_code == 200
-    except Exception:
-        return False
-
-
-pytestmark = pytest.mark.skipif(
-    not _db_available(),
-    reason="PostgreSQL database not available (start with: docker compose up -d db)",
+from conftest import (
+    requires_db, register_and_login, auth_header, invite_and_accept,
 )
+
+
+pytestmark = requires_db
 
 
 # --------------- Helpers ---------------
 
-def _verify_email(client, email: str):
-    token = create_email_verification_token(email)
-    r = client.post("/api/auth/verify-email", json={"token": token})
-    assert r.status_code == 200, r.text
-
-
-def _register(client, username=None, email=None, password="testpass123"):
-    username = username or f"authz_{uuid4().hex[:8]}"
-    email = email or f"authz_{uuid4().hex[:8]}@example.com"
-    r = client.post("/api/auth/register", json={
-        "username": username, "email": email, "password": password,
-    })
-    assert r.status_code == 201, r.text
-    return r.json(), email, password
-
-
-def _register_and_login(client, username=None, email=None, password="testpass123"):
-    user_data, email, password = _register(client, username, email, password)
-    _verify_email(client, email)
-    r = client.post("/api/auth/login", json={"email": email, "password": password})
-    assert r.status_code == 200, r.text
-    token = r.json()["access_token"]
-    return user_data, token, email
-
-
 def _h(token):
     """Build auth header dict."""
-    return {"Authorization": f"Bearer {token}"}
+    return auth_header(token)
 
-
-def _invite_and_accept(client, project_id, owner_token, invitee_email, invitee_token, role):
-    """Owner invites a user and the invitee accepts."""
-    r = client.post(
-        f"/api/projects/{project_id}/invitations",
-        json={"email": invitee_email, "role": role},
-        headers=_h(owner_token),
-    )
-    assert r.status_code == 201, f"Invite failed: {r.text}"
-    invitation_id = r.json()["invitation_id"]
-
-    r = client.post(
-        f"/api/auth/invitations/{invitation_id}/accept",
-        headers=_h(invitee_token),
-    )
-    assert r.status_code in (200, 201), f"Accept failed: {r.text}"
-    return r.json()
 
 
 # --------------- Shared fixture ---------------
@@ -117,12 +45,15 @@ CTX = _Ctx()
 @pytest.fixture(scope="module", autouse=True)
 def setup_project_with_roles():
     """Create four users (owner, editor, viewer, non-member) and a project."""
+    from fastapi.testclient import TestClient
+    from main import app
+
     with TestClient(app) as client:
         # Register & login four users
-        CTX.owner_data, CTX.owner_token, CTX.owner_email = _register_and_login(client)
-        CTX.editor_data, CTX.editor_token, CTX.editor_email = _register_and_login(client)
-        CTX.viewer_data, CTX.viewer_token, CTX.viewer_email = _register_and_login(client)
-        CTX.nonmember_data, CTX.nonmember_token, CTX.nonmember_email = _register_and_login(client)
+        CTX.owner_data, CTX.owner_token, CTX.owner_email, _ = register_and_login(client, prefix="authz")
+        CTX.editor_data, CTX.editor_token, CTX.editor_email, _ = register_and_login(client, prefix="authz")
+        CTX.viewer_data, CTX.viewer_token, CTX.viewer_email, _ = register_and_login(client, prefix="authz")
+        CTX.nonmember_data, CTX.nonmember_token, CTX.nonmember_email, _ = register_and_login(client, prefix="authz")
 
         # Owner creates a project (auto-creates "main" branch)
         r = client.post(
@@ -134,11 +65,11 @@ def setup_project_with_roles():
         CTX.project_id = r.json()["project_id"]
 
         # Add editor and viewer via invitation flow
-        _invite_and_accept(
+        invite_and_accept(
             client, CTX.project_id,
             CTX.owner_token, CTX.editor_email, CTX.editor_token, "editor",
         )
-        _invite_and_accept(
+        invite_and_accept(
             client, CTX.project_id,
             CTX.owner_token, CTX.viewer_email, CTX.viewer_token, "viewer",
         )
@@ -187,12 +118,6 @@ def setup_project_with_roles():
                 CTX.owner_member_id = m["member_id"]
 
     yield
-
-
-@pytest.fixture()
-def client():
-    with TestClient(app) as c:
-        yield c
 
 
 # =====================================================================

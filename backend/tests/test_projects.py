@@ -9,123 +9,23 @@ Requires a running PostgreSQL database.
 Run with: docker compose up -d db && cd backend && pytest tests/test_projects.py -v
 """
 
-import os
-import sys
 import pytest
 from uuid import uuid4
 from datetime import datetime, timedelta, timezone
-import importlib.util
 
-root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if root not in sys.path:
-    sys.path.insert(0, root)
-
-os.environ.setdefault("JWT_SECRET", "test-secret-for-project-tests")
-
-from fastapi.testclient import TestClient
-
-spec = importlib.util.spec_from_file_location("main", os.path.join(root, "main.py"))
-main = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(main)
-app = main.app
-
-from utils.auth import create_email_verification_token
-
-
-# --------------- DB availability ---------------
-
-def _db_available():
-    try:
-        with TestClient(app) as c:
-            return c.get("/api/health").status_code == 200
-    except Exception:
-        return False
-
-
-pytestmark = pytest.mark.skipif(
-    not _db_available(),
-    reason="PostgreSQL database not available (start with: docker compose up -d db)",
+from conftest import (
+    requires_db,
+    register_and_login as _register_and_login,
+    auth_header as _h,
+    create_project as _create_project,
+    get_main_branch as _get_main_branch,
+    make_commit as _make_commit,
+    invite_and_accept as _invite_and_accept,
+    naive_future as _naive_future,
 )
 
 
-# --------------- Helpers ---------------
-
-def _verify(client, email):
-    token = create_email_verification_token(email)
-    r = client.post("/api/auth/verify-email", json={"token": token})
-    assert r.status_code == 200, r.text
-
-
-def _register_and_login(client, prefix="proj"):
-    username = f"{prefix}_{uuid4().hex[:8]}"
-    email = f"{prefix}_{uuid4().hex[:8]}@example.com"
-    r = client.post("/api/auth/register", json={
-        "username": username, "email": email, "password": "testpass123",
-    })
-    assert r.status_code == 201, r.text
-    user_data = r.json()
-    _verify(client, email)
-    r = client.post("/api/auth/login", json={"email": email, "password": "testpass123"})
-    assert r.status_code == 200, r.text
-    return user_data, r.json()["access_token"], email, username
-
-
-def _h(token):
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _create_project(client, token, name=None):
-    name = name or f"Project {uuid4().hex[:6]}"
-    r = client.post("/api/projects", json={"name": name, "description": "test"}, headers=_h(token))
-    assert r.status_code == 201, r.text
-    return r.json()
-
-
-def _get_main_branch(client, token, project_id):
-    r = client.get(f"/api/projects/{project_id}/branches", headers=_h(token))
-    assert r.status_code == 200, r.text
-    branches = r.json()
-    main = [b for b in branches if b["branch_name"] == "main"]
-    assert main, "main branch not found"
-    return main[0]
-
-
-def _make_commit(client, token, project_id, branch_id, message="test commit", objects=None):
-    objects = objects or [{
-        "object_name": f"Obj_{uuid4().hex[:6]}",
-        "object_type": "MESH",
-        "json_data_path": f"test/{uuid4().hex[:6]}.json",
-        "blob_hash": uuid4().hex[:12],
-    }]
-    r = client.post(
-        f"/api/projects/{project_id}/commits",
-        json={"branch_id": branch_id, "commit_message": message, "objects": objects},
-        headers=_h(token),
-    )
-    return r
-
-
-def _invite_and_accept(client, project_id, owner_token, invitee_email, invitee_token, role="editor"):
-    r = client.post(
-        f"/api/projects/{project_id}/invitations",
-        json={"email": invitee_email, "role": role},
-        headers=_h(owner_token),
-    )
-    assert r.status_code == 201, r.text
-    inv_id = r.json()["invitation_id"]
-    r = client.post(f"/api/auth/invitations/{inv_id}/accept", headers=_h(invitee_token))
-    assert r.status_code in (200, 201), r.text
-    return inv_id
-
-
-def _naive_future(hours=1):
-    return (datetime.now(timezone.utc) + timedelta(hours=hours)).replace(tzinfo=None).isoformat()
-
-
-@pytest.fixture()
-def client():
-    with TestClient(app) as c:
-        yield c
+pytestmark = requires_db
 
 
 # =====================================================================
