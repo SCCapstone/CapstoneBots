@@ -10,7 +10,7 @@ import { ApiError, loginApi, signupApi, deleteAccount } from "@/lib/authApi";
 // ============== Mock fetch globally ==============
 
 const mockFetch = jest.fn();
-global.fetch = mockFetch;
+global.fetch = mockFetch as unknown as typeof fetch;
 
 beforeEach(() => {
   mockFetch.mockReset();
