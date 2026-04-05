@@ -775,12 +775,33 @@ def reconstruct_scene(objects_data: list, mesh_binaries: dict,
         for key, val in obj_data.get("custom_properties", {}).items():
             bl_obj[key] = val
 
-        # Link to scene
-        try:
-            bpy.context.scene.collection.objects.link(bl_obj)
-        except RuntimeError:
-            # Object may already be linked (e.g. auto-linked by bpy.data.objects.new)
-            pass
+        # Determine which collections this object belongs to.
+        # Filter out the root scene collection name — we handle that separately.
+        root_col_name = bpy.context.scene.collection.name  # e.g. "Scene Collection"
+        obj_collections = [
+            c for c in obj_data.get("collections", [])
+            if c and c != root_col_name
+        ]
+
+        if obj_collections:
+            # Link to named sub-collections only (NOT the root scene collection)
+            # to avoid the object appearing in multiple places in the outliner.
+            for col_name in obj_collections:
+                col = bpy.data.collections.get(col_name)
+                if not col:
+                    col = bpy.data.collections.new(col_name)
+                    bpy.context.scene.collection.children.link(col)
+                try:
+                    col.objects.link(bl_obj)
+                except RuntimeError:
+                    pass  # Already linked
+        else:
+            # No sub-collections — link directly to the root scene collection.
+            try:
+                bpy.context.scene.collection.objects.link(bl_obj)
+            except RuntimeError:
+                pass
+
         created_objects[name] = bl_obj
 
     # Second pass: parent relationships
@@ -789,17 +810,6 @@ def reconstruct_scene(objects_data: list, mesh_binaries: dict,
         parent_name = obj_data.get("parent")
         if parent_name and parent_name in created_objects:
             created_objects[name].parent = created_objects[parent_name]
-
-    # Third pass: collection assignments
-    for obj_data in objects_data:
-        name = obj_data["object_name"]
-        for col_name in obj_data.get("collections", []):
-            col = bpy.data.collections.get(col_name)
-            if not col:
-                col = bpy.data.collections.new(col_name)
-                bpy.context.scene.collection.children.link(col)
-            if name in created_objects:
-                col.objects.link(created_objects[name])
 
     return created_objects
 

@@ -2264,6 +2264,151 @@ class BVCS_OT_CancelMerge(bpy.types.Operator):
         self.report({'INFO'}, "Merge cancelled, conflict state cleared")
         return {'FINISHED'}
 
+class BVCS_OT_PreviewRemoteConflicts(bpy.types.Operator):
+    """Download remote conflict objects and open them in a new Blender window for comparison."""
+    bl_idname = "bvcs.preview_remote_conflicts"
+    bl_label = "Preview Remote"
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        wm = context.window_manager
+
+        if not prefs.project_id or not prefs.auth_token:
+            self.report({'ERROR'}, "Not logged in or no project selected")
+            return {'CANCELLED'}
+
+        conflict_state = wm.get("bvcs_merge_conflicts")
+        if not conflict_state:
+            self.report({'ERROR'}, "No merge conflicts to preview")
+            return {'CANCELLED'}
+
+        conflict_items = wm.bvcs_conflict_items
+        if not conflict_items:
+            self.report({'ERROR'}, "No conflict items")
+            return {'CANCELLED'}
+
+        remote_commit_hash = str(conflict_state.get("remote_commit_hash", ""))
+        remote_objects_full = _get_commit_objects_full_by_hash(prefs, remote_commit_hash)
+        if not remote_objects_full:
+            self.report({'ERROR'}, "Could not fetch remote objects")
+            return {'CANCELLED'}
+
+        # Download all remote conflict objects to a temp directory
+        temp_dir = os.path.join(tempfile.gettempdir(), "bvcs_conflict_preview")
+        # Clean out old preview data
+        if os.path.isdir(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        os.makedirs(temp_dir, exist_ok=True)
+
+        downloaded_names = []
+
+        for item in conflict_items:
+            remote_obj = remote_objects_full.get(item.object_name)
+            if not remote_obj:
+                logger.warning(f"Remote data not found for '{item.object_name}', skipping preview")
+                continue
+            try:
+                metadata, mesh_binary = _download_remote_object(prefs, remote_obj)
+
+                # Write metadata JSON
+                json_path = os.path.join(temp_dir, f"{item.object_name}.json")
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(metadata, f)
+
+                # Write mesh binary if present
+                if mesh_binary:
+                    mesh_path = os.path.join(temp_dir, f"{item.object_name}.mesh")
+                    with open(mesh_path, "wb") as f:
+                        f.write(mesh_binary)
+
+                downloaded_names.append(item.object_name)
+            except Exception as e:
+                logger.error(f"Failed to download remote '{item.object_name}': {e}")
+                self.report({'WARNING'}, f"Could not download '{item.object_name}': {e}")
+
+        if not downloaded_names:
+            self.report({'ERROR'}, "No remote objects could be downloaded")
+            return {'CANCELLED'}
+
+        # Build a Python script that imports the addon's reconstruct_scene
+        # and uses it with the downloaded data — so materials, modifiers, UVs,
+        # node trees, etc. are all fully reconstructed.
+        output_blend = os.path.join(temp_dir, "remote_conflicts.blend")
+        script_path = os.path.join(temp_dir, "_reconstruct.py")
+
+        # The addon package lives next to this __init__.py.
+        # We add its parent to sys.path so the background Blender can import it.
+        addon_pkg_dir = os.path.dirname(os.path.dirname(__file__))
+
+        script = f'''\
+import sys, os, json
+
+# Make the addon package importable without installing it
+sys.path.insert(0, {addon_pkg_dir!r})
+
+from blender_vcs.object_serialization import reconstruct_scene
+
+temp_dir = {temp_dir!r}
+names = {json.dumps(downloaded_names)}
+
+objects_data = []
+mesh_binaries = {{}}
+
+for name in names:
+    json_path = os.path.join(temp_dir, name + ".json")
+    mesh_path = os.path.join(temp_dir, name + ".mesh")
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        objects_data.append(json.load(f))
+
+    if os.path.isfile(mesh_path):
+        with open(mesh_path, "rb") as f:
+            mesh_binaries[name] = f.read()
+
+reconstruct_scene(objects_data, mesh_binaries, clear_existing=True)
+
+import bpy
+bpy.ops.wm.save_as_mainfile(filepath={output_blend!r})
+'''
+
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script)
+
+        # Run Blender in background to create the .blend
+        blender_bin = bpy.app.binary_path
+        if not blender_bin or not os.path.isfile(blender_bin):
+            self.report({'ERROR'}, "Blender binary not found")
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, "Building remote preview file...")
+
+        try:
+            result = subprocess.run(
+                [blender_bin, "--background", "--python", script_path],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode != 0:
+                stderr_tail = (result.stderr or "")[-800:]
+                logger.error(f"Preview build failed: {stderr_tail}")
+                self.report({'ERROR'}, "Failed to build remote preview file")
+                return {'CANCELLED'}
+        except subprocess.TimeoutExpired:
+            self.report({'ERROR'}, "Preview build timed out")
+            return {'CANCELLED'}
+
+        if not os.path.isfile(output_blend):
+            self.report({'ERROR'}, "Preview .blend file was not created")
+            return {'CANCELLED'}
+
+        # Open the preview in a new Blender window
+        subprocess.Popen([blender_bin, output_blend])
+
+        self.report({'INFO'},
+                    f"Opened remote preview with {len(downloaded_names)} objects: "
+                    f"{', '.join(downloaded_names)}")
+        return {'FINISHED'}
+
+
 class BVCS_OT_CheckConflicts(bpy.types.Operator):
     bl_idname = "bvcs.check_conflicts"
     bl_label = "Check Merge Conflicts"
@@ -2726,7 +2871,8 @@ class BVCS_PT_Panel(bpy.types.Panel):
                     row2.label(text=f"Remote: {item.remote_hash}")
                     conflict_box.prop(item, "resolution", text="Resolution")
 
-                # Action buttons
+                # Preview + action buttons
+                box.operator("bvcs.preview_remote_conflicts", text="Preview Remote Side", icon='WINDOW')
                 row = box.row(align=True)
                 row.operator("bvcs.apply_conflict_resolutions", text="Apply Resolutions", icon='CHECKMARK')
                 row.operator("bvcs.cancel_merge", text="Cancel", icon='X')
@@ -2784,6 +2930,7 @@ classes = [
     BVCS_OT_LoadProjectFile,
     BVCS_OT_ApplyConflictResolutions,
     BVCS_OT_CancelMerge,
+    BVCS_OT_PreviewRemoteConflicts,
     BVCS_OT_CheckConflicts,
     BVCS_OT_RefreshStatus,
     BVCS_PT_Panel,
