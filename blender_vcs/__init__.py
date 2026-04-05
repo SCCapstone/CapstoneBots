@@ -1038,6 +1038,131 @@ def _get_parent_commit_objects(prefs) -> dict:
         return {}
 
 
+def _get_commit_objects_by_hash(prefs, commit_hash: str) -> dict:
+    """Fetch objects from a commit identified by its hash.
+
+    Returns mapping of object_name → blob_hash (string).
+    Falls back to empty dict on any error.
+    """
+    if not commit_hash:
+        return {}
+    headers = get_auth_headers(prefs)
+    api_base = get_api_base(prefs)
+    project_id = prefs.project_id
+    try:
+        resp = requests.get(
+            f"{api_base}/api/projects/{project_id}/commits/by-hash/{commit_hash}/objects",
+            headers=headers,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        objects_list = resp.json()
+        if not isinstance(objects_list, list):
+            return {}
+        return {
+            obj.get("object_name"): obj.get("blob_hash", "")
+            for obj in objects_list
+            if isinstance(obj, dict) and obj.get("object_name")
+        }
+    except Exception as e:
+        logger.warning(f"Failed to fetch commit objects by hash '{commit_hash[:8]}': {e}")
+        return {}
+
+
+def _get_commit_objects_full_by_hash(prefs, commit_hash: str) -> dict:
+    """Fetch full object data from a commit identified by its hash.
+
+    Returns mapping of object_name → {blob_hash, json_data_path, mesh_data_path, object_type}.
+    """
+    if not commit_hash:
+        return {}
+    headers = get_auth_headers(prefs)
+    api_base = get_api_base(prefs)
+    project_id = prefs.project_id
+    try:
+        resp = requests.get(
+            f"{api_base}/api/projects/{project_id}/commits/by-hash/{commit_hash}/objects",
+            headers=headers,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        objects_list = resp.json()
+        if not isinstance(objects_list, list):
+            return {}
+        result = {}
+        for obj in objects_list:
+            if not isinstance(obj, dict):
+                continue
+            name = obj.get("object_name")
+            if name:
+                result[name] = {
+                    "blob_hash": obj.get("blob_hash"),
+                    "json_data_path": obj.get("json_data_path"),
+                    "mesh_data_path": obj.get("mesh_data_path"),
+                    "object_type": obj.get("object_type"),
+                    "object_id": obj.get("object_id"),
+                }
+        return result
+    except Exception as e:
+        logger.warning(f"Failed to fetch full commit objects by hash '{commit_hash[:8]}': {e}")
+        return {}
+
+
+def _download_remote_object(prefs, obj_info: dict):
+    """Download a single object's metadata JSON and optional mesh binary from S3.
+
+    Args:
+        prefs: Addon preferences with auth/API config.
+        obj_info: Dict with json_data_path, mesh_data_path, object_name keys.
+
+    Returns:
+        (metadata_dict, mesh_bytes_or_None) or raises on failure.
+    """
+    headers = get_auth_headers(prefs)
+    api_base = get_api_base(prefs)
+    project_id = prefs.project_id
+
+    json_path = obj_info.get("json_data_path")
+    if not json_path:
+        raise RuntimeError(f"No json_data_path for object '{obj_info.get('object_name')}'")
+
+    # Download JSON metadata
+    url_resp = requests.get(
+        f"{api_base}/api/projects/{project_id}/objects/download-url",
+        params={"path": json_path},
+        headers=headers, timeout=10,
+    )
+    url_resp.raise_for_status()
+    presigned_url = url_resp.json().get("url")
+    if not presigned_url:
+        raise RuntimeError(f"No presigned URL for {json_path}")
+
+    json_resp = requests.get(presigned_url, timeout=15)
+    json_resp.raise_for_status()
+    metadata = json_resp.json()
+
+    # Download mesh binary if available
+    mesh_binary = None
+    mesh_path = obj_info.get("mesh_data_path")
+    if mesh_path:
+        try:
+            mesh_url_resp = requests.get(
+                f"{api_base}/api/projects/{project_id}/objects/download-url",
+                params={"path": mesh_path},
+                headers=headers, timeout=10,
+            )
+            mesh_url_resp.raise_for_status()
+            mesh_presigned = mesh_url_resp.json().get("url")
+            if mesh_presigned:
+                mesh_resp = requests.get(mesh_presigned, timeout=30)
+                mesh_resp.raise_for_status()
+                mesh_binary = mesh_resp.content
+        except Exception as e:
+            logger.warning(f"Failed to download mesh for '{obj_info.get('object_name')}': {e}")
+
+    return metadata, mesh_binary
+
+
 # ---------------- Stage Objects ----------------
 class BVCS_OT_StageObjects(bpy.types.Operator):
     bl_idname = "bvcs.stage_objects"
@@ -1084,6 +1209,22 @@ class BVCS_OT_UnstageObject(bpy.types.Operator):
         self.report({'INFO'}, f"Unstaged {len(selected_objects)} objects")
         return {'FINISHED'}
 
+class BVCS_OT_StageDeletion(bpy.types.Operator):
+    bl_idname = "bvcs.stage_deletion"
+    bl_label = "Stage Deletion"
+    bl_description = "Stage a deleted object for removal in the next commit"
+
+    object_name: bpy.props.StringProperty(name="Object Name")
+
+    def execute(self, context):
+        if not self.object_name:
+            self.report({'ERROR'}, "No object name specified")
+            return {'CANCELLED'}
+        _staging_area.stage_deletion(self.object_name)
+        self.report({'INFO'}, f"Staged deletion: {self.object_name}")
+        return {'FINISHED'}
+
+
 # ---------------- Commit ----------------
 class BVCS_OT_Commit(bpy.types.Operator):
     bl_idname = "bvcs.commit"
@@ -1097,8 +1238,8 @@ class BVCS_OT_Commit(bpy.types.Operator):
             self.report({'ERROR'}, "No project selected")
             return {'CANCELLED'}
 
-        # Require staged objects
-        if not _staging_area.staged_objects:
+        # Require staged objects or deletions
+        if not _staging_area.has_staged_changes():
             self.report({'ERROR'}, "No objects staged. Stage objects before committing.")
             return {'CANCELLED'}
 
@@ -1115,22 +1256,30 @@ class BVCS_OT_Commit(bpy.types.Operator):
             wm = context.window_manager
             base_commit_hash = _get_last_synced_commit_hash(wm)
 
-            # Capture staged object names in the pending commit
+            # Capture staged object names and deletions in the pending commit
             staged_names = _staging_area.get_staged_names()
+            staged_deletions = _staging_area.get_staged_deletions()
 
             # Store commit info locally (will be synced to DB when pushed)
-            # NOTE: staged_objects is JSON-serialized because Blender
-            # IDProperties don't reliably round-trip lists of strings.
+            # NOTE: lists are JSON-serialized because Blender IDProperties
+            # don't reliably round-trip lists of strings.
             context.window_manager["bvcs_pending_commit"] = {
                 "message": self.commit_message,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "file_path": local_file_path,
                 "base_commit_hash": base_commit_hash,
                 "staged_objects_json": json.dumps(staged_names),
+                "staged_deletions_json": json.dumps(staged_deletions),
             }
 
-            self.report({'INFO'}, f"Committed locally: {self.commit_message} ({len(staged_names)} objects)")
-            logger.info(f"Local commit created: {self.commit_message}, staged: {staged_names}")
+            total = len(staged_names) + len(staged_deletions)
+            parts = []
+            if staged_names:
+                parts.append(f"{len(staged_names)} changed")
+            if staged_deletions:
+                parts.append(f"{len(staged_deletions)} deleted")
+            self.report({'INFO'}, f"Committed locally: {self.commit_message} ({', '.join(parts)})")
+            logger.info(f"Local commit created: {self.commit_message}, staged: {staged_names}, deletions: {staged_deletions}")
 
         except Exception as e:
             self.report({'ERROR'}, f"Commit failed: {e}")
@@ -1225,7 +1374,17 @@ class BVCS_OT_Push(bpy.types.Operator):
                 return {'CANCELLED'}
             if base_commit_hash != remote_commit_hash:
                 # Object-level three-way merge check
+                # Base = last synced commit (common ancestor)
+                base_objects_map = _get_commit_objects_by_hash(prefs, base_commit_hash)
+
+                # Remote = current remote HEAD
                 parent_objects = _get_parent_commit_objects(prefs)
+                remote_objects_map = {
+                    name: data.get("blob_hash", "")
+                    for name, data in parent_objects.items()
+                }
+
+                # Local = current scene
                 scene_objects_map = {}
                 for obj in bpy.context.scene.objects:
                     meta = serialize_object_metadata(obj)
@@ -1234,29 +1393,72 @@ class BVCS_OT_Push(bpy.types.Operator):
                         mesh_bin = serialize_mesh_data(obj)
                     scene_objects_map[obj.name] = compute_object_hash(meta, mesh_bin)
 
-                remote_objects_map = {
-                    name: data.get("blob_hash", "")
-                    for name, data in parent_objects.items()
-                }
-                base_objects_map = {}  # From base commit — use remote as proxy for now
-                # For a true base, we'd need the common ancestor. For simplicity,
-                # detect if there are object-level conflicts.
                 merge_plan = compute_object_diff(
-                    remote_objects_map,  # treat remote HEAD as base for conflict check
+                    base_objects_map,
                     scene_objects_map,
                     remote_objects_map,
                 )
                 if merge_plan.conflicts:
                     conflict_names = [c["object_name"] for c in merge_plan.conflicts]
+
+                    # Get remote commit ID for merge parent reference
+                    remote_commit_id = ""
+                    try:
+                        commits_resp = requests.get(
+                            f"{get_api_base(prefs)}/api/projects/{prefs.project_id}/commits",
+                            params={"branch_name": "main"},
+                            headers=get_auth_headers(prefs), timeout=10,
+                        )
+                        commits_resp.raise_for_status()
+                        commits = commits_resp.json()
+                        if isinstance(commits, list) and commits:
+                            remote_commit_id = str(commits[0].get("commit_id", ""))
+                    except Exception:
+                        pass
+
+                    # Store enriched conflict state
+                    wm["bvcs_merge_conflicts"] = {
+                        "flow": "push",
+                        "base_commit_hash": base_commit_hash,
+                        "remote_commit_hash": remote_commit_hash,
+                        "remote_commit_id": remote_commit_id,
+                        "detected_at": datetime.now(timezone.utc).isoformat(),
+                        "merge_plan": {
+                            "auto_merge_local": merge_plan.auto_merge_local,
+                            "auto_merge_remote": merge_plan.auto_merge_remote,
+                            "unchanged": merge_plan.unchanged,
+                            "conflicts": merge_plan.conflicts,
+                        },
+                    }
+
+                    # Populate conflict items for UI
+                    wm.bvcs_conflict_items.clear()
+                    for c in merge_plan.conflicts:
+                        item = wm.bvcs_conflict_items.add()
+                        item.object_name = c["object_name"]
+                        item.conflict_type = str(c.get("conflict_type", ""))
+                        item.local_hash = str(c.get("local_hash", ""))[:10]
+                        item.remote_hash = str(c.get("remote_hash", ""))[:10]
+                        # Set sensible defaults based on conflict type
+                        ctype = str(c.get("conflict_type", ""))
+                        if ctype == "DELETED_LOCALLY":
+                            item.resolution = "KEEP_REMOTE"
+                        elif ctype == "DELETED_REMOTELY":
+                            item.resolution = "KEEP_LOCAL"
+                        else:
+                            item.resolution = "KEEP_LOCAL"
+
+                    # Also keep legacy key for backward compatibility
                     wm["bvcs_push_conflict"] = {
                         "base_commit_hash": base_commit_hash,
                         "remote_commit_hash": remote_commit_hash,
                         "conflict_objects": conflict_names,
                         "detected_at": datetime.now(timezone.utc).isoformat(),
                     }
+
                     self.report(
                         {'ERROR'},
-                        f"Push blocked: conflicts on {', '.join(conflict_names)}. Resolve before pushing."
+                        f"Push blocked: conflicts on {', '.join(conflict_names)}. Resolve in the panel before pushing."
                     )
                     return {'CANCELLED'}
 
@@ -1269,8 +1471,8 @@ class BVCS_OT_Push(bpy.types.Operator):
         parent_objects = _get_parent_commit_objects(prefs)
         scene_objects = list(bpy.context.scene.objects)
 
-        # Decode staged names from JSON string (stored this way because
-        # Blender IDProperties don't reliably round-trip string lists).
+        # Decode staged names and deletions from JSON strings (stored this
+        # way because Blender IDProperties don't reliably round-trip string lists).
         staged_names = set()
         staged_json = pending_commit.get("staged_objects_json", "")
         if staged_json:
@@ -1287,10 +1489,19 @@ class BVCS_OT_Push(bpy.types.Operator):
             except (TypeError, ValueError):
                 staged_names = set()
 
+        staged_deletions = set()
+        deletions_json = pending_commit.get("staged_deletions_json", "")
+        if deletions_json:
+            try:
+                staged_deletions = set(json.loads(str(deletions_json)))
+            except (json.JSONDecodeError, TypeError):
+                staged_deletions = set()
+
         push_result = prepare_push_objects(
             scene_objects,
             parent_objects,
             staged_names=staged_names if staged_names else None,
+            staged_deletions=staged_deletions,
         )
 
         # ── Upload changed objects via presigned URLs / direct upload ────
@@ -1488,8 +1699,8 @@ class BVCS_OT_PullProject(bpy.types.Operator):
             # Build hash maps for three-way merge
             remote_hash_map = build_commit_objects_hash_map(remote_objects_list)
 
-            # Use the synced commit's objects as the base (common ancestor)
-            base_hash_map = remote_hash_map  # Approximate — see plan
+            # Base = last synced commit (common ancestor)
+            base_hash_map = _get_commit_objects_by_hash(prefs, synced_hash)
 
             # Build local scene hash map
             scene_hash_map = {}
@@ -1510,16 +1721,53 @@ class BVCS_OT_PullProject(bpy.types.Operator):
             if merge_plan.conflicts:
                 # Block pull — conflicts found
                 conflict_names = [c["object_name"] for c in merge_plan.conflicts]
+
+                # Get remote commit ID for merge parent reference
+                remote_commit_id = str(latest_commit.get("commit_id", ""))
+
+                # Store enriched conflict state
+                wm["bvcs_merge_conflicts"] = {
+                    "flow": "pull",
+                    "base_commit_hash": synced_hash,
+                    "remote_commit_hash": remote_commit_hash,
+                    "remote_commit_id": remote_commit_id,
+                    "detected_at": datetime.now(timezone.utc).isoformat(),
+                    "merge_plan": {
+                        "auto_merge_local": merge_plan.auto_merge_local,
+                        "auto_merge_remote": merge_plan.auto_merge_remote,
+                        "unchanged": merge_plan.unchanged,
+                        "conflicts": merge_plan.conflicts,
+                    },
+                }
+
+                # Populate conflict items for UI
+                wm.bvcs_conflict_items.clear()
+                for c in merge_plan.conflicts:
+                    item = wm.bvcs_conflict_items.add()
+                    item.object_name = c["object_name"]
+                    item.conflict_type = str(c.get("conflict_type", ""))
+                    item.local_hash = str(c.get("local_hash", ""))[:10]
+                    item.remote_hash = str(c.get("remote_hash", ""))[:10]
+                    ctype = str(c.get("conflict_type", ""))
+                    if ctype == "DELETED_LOCALLY":
+                        item.resolution = "KEEP_REMOTE"
+                    elif ctype == "DELETED_REMOTELY":
+                        item.resolution = "KEEP_LOCAL"
+                    else:
+                        item.resolution = "KEEP_LOCAL"
+
+                # Legacy key for backward compatibility
                 wm["bvcs_push_conflict"] = {
                     "base_commit_hash": synced_hash,
                     "remote_commit_hash": remote_commit_hash,
                     "conflict_objects": conflict_names,
                     "detected_at": datetime.now(timezone.utc).isoformat(),
                 }
+
                 self.report(
                     {'ERROR'},
                     f"Pull blocked: merge conflicts on {', '.join(conflict_names)}. "
-                    f"Resolve conflicts before pulling."
+                    f"Resolve conflicts in the panel before pulling."
                 )
                 return {'CANCELLED'}
 
@@ -1733,131 +1981,281 @@ class BVCS_OT_LoadProjectFile(bpy.types.Operator):
             self.report({'ERROR'}, f"Load failed: {e}")
             return {'CANCELLED'}
 
-class BVCS_OT_ResolveMergeConflict(bpy.types.Operator):
-    bl_idname = "bvcs.resolve_merge_conflict"
-    bl_label = "Resolve Merge Conflict"
-
+class BVCS_ConflictItem(bpy.types.PropertyGroup):
+    """Per-object conflict entry displayed in the N-panel."""
+    object_name: bpy.props.StringProperty(name="Object")
+    conflict_type: bpy.props.StringProperty(name="Type")
+    local_hash: bpy.props.StringProperty(name="Local Hash")
+    remote_hash: bpy.props.StringProperty(name="Remote Hash")
     resolution: bpy.props.EnumProperty(
-        name="Action",
-        description="Choose how to resolve this file conflict",
+        name="Resolution",
         items=[
-            ("KEEP_MAIN", "Keep Main As-Is", "Keep remote/main version and discard local pending push"),
-            ("PUSH_LOCAL", "Push My Version", "Keep your current file and allow push to main"),
+            ("KEEP_LOCAL", "Keep Local", "Keep your local version"),
+            ("KEEP_REMOTE", "Keep Remote", "Use the remote version"),
+            ("KEEP_BOTH", "Keep Both", "Import remote as ObjectName.remote for comparison"),
+            ("DELETE", "Delete", "Remove this object from the commit"),
         ],
-        default="PUSH_LOCAL"
+        default="KEEP_LOCAL",
     )
 
-    def invoke(self, context, event):
+
+class BVCS_OT_ApplyConflictResolutions(bpy.types.Operator):
+    """Apply per-object conflict resolutions and create a merge commit."""
+    bl_idname = "bvcs.apply_conflict_resolutions"
+    bl_label = "Apply Conflict Resolutions"
+
+    def execute(self, context):
         prefs = get_prefs(context)
         wm = context.window_manager
-        conflict = wm.get("bvcs_push_conflict")
-        if not conflict:
-            self.report({'ERROR'}, "No push conflict to resolve")
+
+        if not prefs.project_id or not prefs.auth_token:
+            self.report({'ERROR'}, "Not logged in or no project selected")
             return {'CANCELLED'}
 
-        remote_s3_path = conflict.get("remote_s3_path")
-        if not remote_s3_path:
-            self.report({'ERROR'}, "Conflict missing remote file path")
+        conflict_state = wm.get("bvcs_merge_conflicts")
+        if not conflict_state:
+            self.report({'ERROR'}, "No merge conflicts to resolve")
             return {'CANCELLED'}
 
-        remote_info = {
-            "s3_path": remote_s3_path,
-            "object_name": conflict.get("remote_object_name") or "remote_conflict.blend",
-            "commit_id": conflict.get("remote_commit_id"),
-            "commit_hash": conflict.get("remote_commit_hash"),
-            "commit_message": conflict.get("remote_commit_message"),
-        }
+        conflict_items = wm.bvcs_conflict_items
+        if not conflict_items:
+            self.report({'ERROR'}, "No conflict items found")
+            return {'CANCELLED'}
+
+        # Validate all conflicts have a resolution
+        for item in conflict_items:
+            if not item.resolution:
+                self.report({'ERROR'}, f"No resolution set for '{item.object_name}'")
+                return {'CANCELLED'}
+
+        merge_plan_data = conflict_state.get("merge_plan", {})
+        remote_commit_hash = str(conflict_state.get("remote_commit_hash", ""))
+        remote_commit_id = str(conflict_state.get("remote_commit_id", ""))
+
+        # Fetch remote objects (full data) for objects we need from remote
+        remote_objects_full = _get_commit_objects_full_by_hash(prefs, remote_commit_hash)
+
+        headers = get_auth_headers(prefs)
+        api_base = get_api_base(prefs)
+
+        # ── Process KEEP_BOTH and KEEP_REMOTE: download + import remote objects ──
+        objects_to_import = []  # (metadata, mesh_binary, target_name)
+
+        for item in conflict_items:
+            if item.resolution in ("KEEP_REMOTE", "KEEP_BOTH"):
+                remote_obj = remote_objects_full.get(item.object_name)
+                if not remote_obj:
+                    self.report({'ERROR'}, f"Remote data not found for '{item.object_name}'")
+                    return {'CANCELLED'}
+                try:
+                    metadata, mesh_binary = _download_remote_object(prefs, remote_obj)
+                    if item.resolution == "KEEP_BOTH":
+                        # Rename to .remote for side-by-side comparison
+                        target_name = f"{item.object_name}.remote"
+                        metadata["object_name"] = target_name
+                    else:
+                        target_name = item.object_name
+                    objects_to_import.append((metadata, mesh_binary, target_name))
+                except Exception as e:
+                    logger.error(f"Failed to download remote '{item.object_name}': {e}")
+                    self.report({'ERROR'}, f"Download failed for '{item.object_name}': {e}")
+                    return {'CANCELLED'}
+
+        # ── Apply resolutions to the Blender scene ──
+        for item in conflict_items:
+            if item.resolution == "KEEP_LOCAL":
+                # Nothing to do — local scene already has this object
+                pass
+            elif item.resolution == "KEEP_REMOTE":
+                # Remove local, will be replaced by downloaded remote
+                local_obj = bpy.data.objects.get(item.object_name)
+                if local_obj:
+                    bpy.data.objects.remove(local_obj, do_unlink=True)
+            elif item.resolution == "DELETE":
+                local_obj = bpy.data.objects.get(item.object_name)
+                if local_obj:
+                    bpy.data.objects.remove(local_obj, do_unlink=True)
+            # KEEP_BOTH: don't remove local, remote will be added with .remote suffix
+
+        # Import remote objects into scene
+        if objects_to_import:
+            import_data = [md for md, _, _ in objects_to_import]
+            import_meshes = {}
+            for md, mesh_bin, target_name in objects_to_import:
+                if mesh_bin:
+                    import_meshes[target_name] = mesh_bin
+            reconstruct_scene(import_data, import_meshes, clear_existing=False)
+
+        # ── Also handle auto-merge remote objects (changed only on remote side) ──
+        auto_remote_names = merge_plan_data.get("auto_merge_remote", [])
+        if auto_remote_names:
+            auto_import_data = []
+            auto_import_meshes = {}
+            for name in auto_remote_names:
+                remote_obj = remote_objects_full.get(name)
+                if not remote_obj:
+                    continue
+                try:
+                    metadata, mesh_binary = _download_remote_object(prefs, remote_obj)
+                    auto_import_data.append(metadata)
+                    if mesh_binary:
+                        auto_import_meshes[name] = mesh_binary
+                except Exception as e:
+                    logger.warning(f"Failed to auto-merge remote object '{name}': {e}")
+            if auto_import_data:
+                reconstruct_scene(auto_import_data, auto_import_meshes, clear_existing=False)
+
+        # ── Now build and push the merge commit ──
+        self.report({'INFO'}, "Building merge commit...")
 
         try:
-            remote_local_path = _download_project_file_info(
-                prefs, remote_info, temp_subdir="bvcs_conflict_compare"
+            # Get main branch ID
+            branches_resp = requests.get(
+                f"{api_base}/api/projects/{prefs.project_id}/branches",
+                headers=headers, timeout=10,
             )
-            local_path = (
-                    conflict.get("local_file_path")
-                    or (wm.get("bvcs_pending_commit") or {}).get("file_path")
-                    or bpy.context.blend_data.filepath
+            branches_resp.raise_for_status()
+            branches = branches_resp.json()
+            main_branch = next((b for b in branches if b.get("branch_name") == "main"), None)
+            if not main_branch:
+                self.report({'ERROR'}, "Main branch not found")
+                return {'CANCELLED'}
+
+            # Build the full scene snapshot for the merge commit
+            parent_objects = _get_parent_commit_objects(prefs)
+            scene_objects = list(bpy.context.scene.objects)
+
+            # All scene objects are staged for the merge commit
+            staged_names = {obj.name for obj in scene_objects}
+            staged_deletions = set()
+
+            # Objects with resolution DELETE should be excluded
+            for item in conflict_items:
+                if item.resolution == "DELETE":
+                    staged_deletions.add(item.object_name)
+                    staged_names.discard(item.object_name)
+
+            push_result = prepare_push_objects(
+                scene_objects,
+                parent_objects,
+                staged_names=staged_names,
+                staged_deletions=staged_deletions,
             )
 
-            wm["bvcs_push_conflict_compare"] = {
-                "local_path": local_path or "",
-                "remote_path": remote_local_path,
-                "remote_commit_hash": conflict.get("remote_commit_hash"),
-                "generated_at": datetime.now(timezone.utc).isoformat(),
+            # Upload changed objects
+            upload_results = {}
+            changed_objects = [obj for obj in push_result if obj["changed"]]
+
+            for obj_data in changed_objects:
+                name = obj_data["object_name"]
+                try:
+                    import io
+                    json_bytes = json.dumps(obj_data["metadata"], indent=2).encode("utf-8")
+                    files = {"json_file": ("metadata.json", io.BytesIO(json_bytes), "application/json")}
+                    if obj_data["mesh_binary"]:
+                        files["mesh_file"] = ("mesh.bin", io.BytesIO(obj_data["mesh_binary"]), "application/octet-stream")
+
+                    upload_resp = requests.post(
+                        f"{api_base}/api/projects/{prefs.project_id}/objects/stage-upload",
+                        params={
+                            "object_name": name,
+                            "object_type": obj_data["object_type"],
+                            "blob_hash": obj_data["blob_hash"],
+                        },
+                        files=files,
+                        headers=headers,
+                        timeout=30,
+                    )
+                    upload_resp.raise_for_status()
+                    upload_data = upload_resp.json()
+                    upload_results[name] = {
+                        "json_data_path": upload_data.get("json_path", ""),
+                        "mesh_data_path": upload_data.get("mesh_path"),
+                        "blob_hash": obj_data["blob_hash"],
+                    }
+                except Exception as e:
+                    logger.error(f"Failed to upload merge object {name}: {e}")
+                    self.report({'ERROR'}, f"Upload failed for {name}: {e}")
+                    return {'CANCELLED'}
+
+            commit_objects = build_commit_objects_list(push_result, upload_results)
+
+            # Build conflict summary for commit message
+            resolution_summary = ", ".join(
+                f"{item.object_name}={item.resolution}" for item in conflict_items
+            )
+            pending = wm.get("bvcs_pending_commit")
+            original_msg = (pending.get("message") if pending else None) or "Merge remote changes"
+            merge_msg = f"Merge: {original_msg} [resolved: {resolution_summary}]"
+
+            # Create merge commit
+            commit_payload = {
+                "branch_id": main_branch["branch_id"],
+                "commit_message": merge_msg,
+                "objects": commit_objects,
+                "merge_commit": True,
+                "merge_parent_id": remote_commit_id if remote_commit_id else None,
             }
 
-            # Open remote version in a separate Blender instance for side-by-side comparison.
-            blender_bin = bpy.app.binary_path
-            if not blender_bin or not os.path.isfile(blender_bin):
-                logger.error(f"Blender binary path is invalid or not found: {blender_bin!r}")
-                self.report({'ERROR'}, "Cannot open remote file: Blender binary not found.")
-                return {'CANCELLED'}
+            commit_resp = requests.post(
+                f"{api_base}/api/projects/{prefs.project_id}/commits",
+                json=commit_payload,
+                headers=headers,
+                timeout=15,
+            )
+            commit_resp.raise_for_status()
+            commit_data = commit_resp.json()
 
-            if not remote_local_path or not os.path.isfile(remote_local_path):
-                logger.error(f"Remote conflict file path is invalid or not found: {remote_local_path!r}")
-                self.report({'ERROR'}, "Cannot open remote file: downloaded file not found.")
-                return {'CANCELLED'}
-
-            subprocess.Popen([blender_bin, remote_local_path])
-            return context.window_manager.invoke_props_dialog(self, width=700)
         except Exception as e:
-            logger.error(f"Failed to prepare merge conflict resolution: {e}")
-            self.report({'ERROR'}, f"Resolve setup failed: {e}")
+            logger.error(f"Merge commit creation failed: {e}")
+            self.report({'ERROR'}, f"Merge commit failed: {e}")
             return {'CANCELLED'}
+
+        # ── Clean up state ──
+        wm["bvcs_last_pushed"] = {
+            "commit_id": commit_data.get("commit_id"),
+            "commit_hash": commit_data.get("commit_hash"),
+            "pushed_at": datetime.now(timezone.utc).isoformat(),
+            "objects_uploaded": len(changed_objects),
+            "objects_reused": len(push_result) - len(changed_objects),
+        }
+        wm["bvcs_last_synced_commit_hash"] = commit_data.get("commit_hash") or ""
+
+        # Clear conflict state
+        if "bvcs_merge_conflicts" in wm:
+            del wm["bvcs_merge_conflicts"]
+        if "bvcs_push_conflict" in wm:
+            del wm["bvcs_push_conflict"]
+        if "bvcs_push_conflict_compare" in wm:
+            del wm["bvcs_push_conflict_compare"]
+        if "bvcs_pending_commit" in wm:
+            del wm["bvcs_pending_commit"]
+        wm.bvcs_conflict_items.clear()
+        _staging_area.clear()
+
+        short_hash = str(commit_data.get("commit_hash", ""))[:8]
+        self.report({'INFO'}, f"Merge commit created: {short_hash}")
+        logger.info(f"Merge commit {commit_data.get('commit_hash')} with {len(conflict_items)} resolved conflicts")
+
+        return {'FINISHED'}
+
+
+class BVCS_OT_CancelMerge(bpy.types.Operator):
+    """Cancel the current merge and discard conflict state."""
+    bl_idname = "bvcs.cancel_merge"
+    bl_label = "Cancel Merge"
 
     def execute(self, context):
         wm = context.window_manager
-        conflict = wm.get("bvcs_push_conflict")
-        if not conflict:
-            self.report({'ERROR'}, "No push conflict to resolve")
-            return {'CANCELLED'}
-
-        remote_hash = str(conflict.get("remote_commit_hash") or "")
-        if not remote_hash:
-            self.report({'ERROR'}, "Conflict missing remote commit hash")
-            return {'CANCELLED'}
-
-        if self.resolution == "KEEP_MAIN":
-            if "bvcs_pending_commit" in wm:
-                del wm["bvcs_pending_commit"]
-            wm["bvcs_last_synced_commit_hash"] = remote_hash
-            if "bvcs_push_conflict_compare" in wm:
-                del wm["bvcs_push_conflict_compare"]
-            if "bvcs_push_conflict" in wm:
-                del wm["bvcs_push_conflict"]
-            self.report({'INFO'}, "Main kept as-is. Local pending push was discarded.")
-            return {'FINISHED'}
-
-        pending = wm.get("bvcs_pending_commit")
-        if not pending:
-            self.report({'ERROR'}, "No pending local commit to push")
-            return {'CANCELLED'}
-
-        pending["base_commit_hash"] = remote_hash
-        if pending.get("message") and not str(pending.get("message")).startswith("Merge:"):
-            pending["message"] = f"Merge: {pending['message']}"
-        wm["bvcs_pending_commit"] = pending
-        if "bvcs_push_conflict_compare" in wm:
-            del wm["bvcs_push_conflict_compare"]
+        if "bvcs_merge_conflicts" in wm:
+            del wm["bvcs_merge_conflicts"]
         if "bvcs_push_conflict" in wm:
             del wm["bvcs_push_conflict"]
-        self.report(
-            {'WARNING'},
-            "Conflict resolved: your local version will be pushed. Any remote changes not manually merged into your file will be overwritten."
-        )
+        if "bvcs_push_conflict_compare" in wm:
+            del wm["bvcs_push_conflict_compare"]
+        wm.bvcs_conflict_items.clear()
+        self.report({'INFO'}, "Merge cancelled, conflict state cleared")
         return {'FINISHED'}
-
-    def draw(self, context):
-        wm = context.window_manager
-        compare = wm.get("bvcs_push_conflict_compare", {})
-        layout = self.layout
-        layout.label(text="Remote and local files are opened/prepared for comparison.", icon='INFO')
-        layout.label(text=f"Local: {compare.get('local_path', '')}")
-        layout.label(text=f"Remote: {compare.get('remote_path', '')}")
-        layout.separator()
-        layout.label(text="WARNING: 'Push My Version' does NOT auto-merge remote changes.", icon='ERROR')
-        layout.label(text="Manually copy any needed changes from the remote file before pushing.")
-        layout.separator()
-        layout.prop(self, "resolution")
 
 class BVCS_OT_CheckConflicts(bpy.types.Operator):
     bl_idname = "bvcs.check_conflicts"
@@ -1933,7 +2331,7 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
             for name, data in parent_objects.items()
         }
 
-        # Use remote as base for now (parent commit)
+        # Fetch proper base (common ancestor) for three-way diff
         wm = bpy.context.window_manager
         base_hash = _get_last_synced_commit_hash(wm)
         remote_hash = _get_latest_remote_commit_hash(prefs)
@@ -1942,9 +2340,10 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
             # No remote changes — compute local diff only
             return None, scene_objects_map, remote_objects_map
 
-        # Three-way merge
+        # Three-way merge with proper base
+        base_objects_map = _get_commit_objects_by_hash(prefs, base_hash)
         merge_plan = compute_object_diff(
-            remote_objects_map,  # base (what we last pulled)
+            base_objects_map,    # base (last synced commit)
             scene_objects_map,   # local
             remote_objects_map,  # remote HEAD
         )
@@ -2229,7 +2628,12 @@ class BVCS_PT_Panel(bpy.types.Panel):
                         icon = 'ADD'
                     elif status == ObjectStatus.DELETED:
                         icon = 'REMOVE'
-                    box.label(text=f"  [{status.value}] {name}", icon=icon)
+                    row = box.row(align=True)
+                    row.label(text=f"  [{status.value}] {name}", icon=icon)
+                    # Show "Stage Deletion" button for deleted objects
+                    if status == ObjectStatus.DELETED and not _staging_area.is_staged_for_deletion(name):
+                        op = row.operator("bvcs.stage_deletion", text="", icon='TRASH')
+                        op.object_name = name
             else:
                 box.label(text="  No changes detected")
 
@@ -2243,7 +2647,8 @@ class BVCS_PT_Panel(bpy.types.Panel):
             row.operator("bvcs.unstage_object", text="Unstage")
 
             staged = _staging_area.get_staged_names()
-            if staged:
+            staged_dels = _staging_area.get_staged_deletions()
+            if staged or staged_dels:
                 for name in staged:
                     status_icon = 'CHECKMARK'
                     # Show status indicator if available
@@ -2254,6 +2659,8 @@ class BVCS_PT_Panel(bpy.types.Panel):
                         elif st == ObjectStatus.ADDED:
                             status_icon = 'ADD'
                     box.label(text=f"  {name}", icon=status_icon)
+                for name in staged_dels:
+                    box.label(text=f"  {name} (delete)", icon='TRASH')
             else:
                 box.label(text="  No objects staged")
 
@@ -2285,7 +2692,40 @@ class BVCS_PT_Panel(bpy.types.Panel):
                 box.label(text=f"  {staged_count} objects staged")
                 box.label(text="  (Click Push to sync)")
 
-            if "bvcs_push_conflict" in wm:
+            # ── Merge Conflicts (per-object resolution) ──
+            if "bvcs_merge_conflicts" in wm and wm.bvcs_conflict_items:
+                conflict_state = wm["bvcs_merge_conflicts"]
+                merge_plan = conflict_state.get("merge_plan", {})
+                layout.separator()
+                box = layout.box()
+                flow = conflict_state.get("flow", "push").title()
+                box.label(text=f"Merge Conflicts ({flow})", icon='ERROR')
+                box.label(text=f"  Remote: {str(conflict_state.get('remote_commit_hash', ''))[:8]}...")
+
+                # Show auto-resolved summary
+                auto_local = len(merge_plan.get("auto_merge_local", []))
+                auto_remote = len(merge_plan.get("auto_merge_remote", []))
+                if auto_local or auto_remote:
+                    box.label(text=f"  Auto-resolved: {auto_local} local, {auto_remote} remote", icon='CHECKMARK')
+
+                # Show each conflict with resolution dropdown
+                for i, item in enumerate(wm.bvcs_conflict_items):
+                    conflict_box = box.box()
+                    row = conflict_box.row()
+                    row.label(text=item.object_name, icon='ERROR')
+                    row.label(text=item.conflict_type)
+                    row2 = conflict_box.row()
+                    row2.label(text=f"Local: {item.local_hash}")
+                    row2.label(text=f"Remote: {item.remote_hash}")
+                    conflict_box.prop(item, "resolution", text="Resolution")
+
+                # Action buttons
+                row = box.row(align=True)
+                row.operator("bvcs.apply_conflict_resolutions", text="Apply Resolutions", icon='CHECKMARK')
+                row.operator("bvcs.cancel_merge", text="Cancel", icon='X')
+
+            elif "bvcs_push_conflict" in wm:
+                # Fallback: legacy conflict display (no merge_plan data)
                 conflict = wm["bvcs_push_conflict"]
                 layout.separator()
                 box = layout.box()
@@ -2295,7 +2735,7 @@ class BVCS_PT_Panel(bpy.types.Panel):
                 if conflict_objs:
                     for cname in conflict_objs:
                         box.label(text=f"    {cname}", icon='ERROR')
-                box.operator("bvcs.resolve_merge_conflict", text="Resolve Merge Conflict")
+                box.operator("bvcs.check_conflicts", text="Resolve Conflicts")
 
             # Show last push info
             if "bvcs_last_pushed" in wm:
@@ -2319,6 +2759,7 @@ class BVCS_PT_Panel(bpy.types.Panel):
 # ---------------- Registration ----------------
 classes = [
     BVCSAddonPreferences,
+    BVCS_ConflictItem,
     BVCS_OT_Login,
     BVCS_OT_OpenSignupPage,
     BVCS_OT_Logout,
@@ -2327,13 +2768,15 @@ classes = [
     BVCS_OT_StageObjects,
     BVCS_OT_StageAll,
     BVCS_OT_UnstageObject,
+    BVCS_OT_StageDeletion,
     BVCS_OT_Commit,
     BVCS_OT_TestS3,
     BVCS_OT_RefreshS3,
     BVCS_OT_Push,
     BVCS_OT_PullProject,
     BVCS_OT_LoadProjectFile,
-    BVCS_OT_ResolveMergeConflict,
+    BVCS_OT_ApplyConflictResolutions,
+    BVCS_OT_CancelMerge,
     BVCS_OT_CheckConflicts,
     BVCS_OT_RefreshStatus,
     BVCS_PT_Panel,
@@ -2347,6 +2790,9 @@ def register():
         description="Select a pushed .blend file",
         items=_enum_project_blend_files,
     )
+    bpy.types.WindowManager.bvcs_conflict_items = bpy.props.CollectionProperty(
+        type=BVCS_ConflictItem,
+    )
     # Remove stale temp .blend files from previous sessions (older than 24 h).
     try:
         _cleanup_bvcs_temp_dirs()
@@ -2359,6 +2805,8 @@ def unregister():
         _cleanup_bvcs_temp_dirs(force=True)
     except Exception:
         logger.debug("Temp cleanup on unregister skipped due to error")
+    if hasattr(bpy.types.WindowManager, "bvcs_conflict_items"):
+        del bpy.types.WindowManager.bvcs_conflict_items
     if hasattr(bpy.types.WindowManager, "bvcs_project_file"):
         del bpy.types.WindowManager.bvcs_project_file
     for cls in reversed(classes):

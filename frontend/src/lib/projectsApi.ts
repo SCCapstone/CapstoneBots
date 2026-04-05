@@ -83,6 +83,17 @@ export interface BlenderObject {
   created_at: string;
 }
 
+export type MergeConflict = {
+  conflict_id: string;
+  project_id: string;
+  source_commit_id: string;
+  target_branch_id: string;
+  object_name: string;
+  conflict_type: string;
+  resolved: boolean;
+  created_at: string;
+};
+
 export type ObjectDiffStatus = "added" | "modified" | "deleted" | "unchanged";
 
 export interface ObjectDiffEntry {
@@ -415,4 +426,36 @@ export function computeObjectDiff(
   entries.sort((a, b) => order[a.status] - order[b.status]);
 
   return entries;
+}
+
+// ============== Merge Conflicts ==============
+
+export async function fetchConflicts(
+  token: string,
+  projectId: string
+): Promise<MergeConflict[]> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/conflicts`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+  if (!res.ok) await handleProjectError(res, "Fetch conflicts");
+  return res.json();
+}
+
+export async function resolveConflict(
+  token: string,
+  projectId: string,
+  conflictId: string
+): Promise<MergeConflict> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/conflicts/${conflictId}`,
+    {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+  if (!res.ok) await handleProjectError(res, "Resolve conflict");
+  return res.json();
 }

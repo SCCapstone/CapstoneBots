@@ -24,16 +24,28 @@ def prepare_push_objects(
     scene_objects: list,
     parent_objects: dict,
     staged_names: set = None,
+    staged_deletions: set = None,
 ) -> list[dict]:
     """
-    Prepare scene objects for push by serializing and detecting changes.
+    Prepare a complete commit snapshot from scene objects + parent history.
+
+    Every commit is a full snapshot.  This function ensures that:
+    - Staged objects are hash-compared and uploaded when changed.
+    - Unstaged objects that already exist in the parent are carried forward
+      with the parent's S3 paths (cheap reference, no re-upload).
+    - Unstaged *new* objects (in scene but not in parent) are still uploaded
+      so the snapshot is complete.
+    - Parent objects that are no longer in the scene are carried forward
+      *unless* they are explicitly staged for deletion.
 
     Args:
         scene_objects: List of bpy.types.Object (or mocks)
         parent_objects: {object_name: {blob_hash, json_data_path, mesh_data_path}}
                        from parent commit. Empty dict for first commit.
-        staged_names: Set of object names explicitly staged. If None, all
-                     objects are considered staged.
+        staged_names: Set of object names explicitly staged for add/modify.
+                     If None, all objects are considered staged.
+        staged_deletions: Set of object names explicitly staged for removal.
+                         If None, no deletions are staged.
 
     Returns:
         List of dicts, one per object:
@@ -47,11 +59,17 @@ def prepare_push_objects(
                 "parent_data": dict,     # parent's paths if unchanged
             }
     """
-    result = []
+    if staged_deletions is None:
+        staged_deletions = set()
 
+    result = []
+    scene_names = set()
+
+    # ── Process objects currently in the scene ───────────────────────────
     for obj in scene_objects:
         name = obj.name
         obj_type = obj.type
+        scene_names.add(name)
 
         # Serialize metadata
         metadata = serialize_object_metadata(obj)
@@ -67,15 +85,16 @@ def prepare_push_objects(
         parent_data = parent_objects.get(name, {})
         parent_hash = parent_data.get("blob_hash")
 
-        # Determine if this object is "changed" for this commit:
-        # - If staged_names is provided and this object is NOT staged,
-        #   treat it as unchanged (reuse parent even if locally modified)
-        # - If no parent hash exists, it's always new/changed
-        # - If hashes differ, it's changed
-        if staged_names is not None and name not in staged_names:
-            changed = False
-        elif parent_hash is None:
+        # Determine if this object needs uploading:
+        # - New objects (no parent hash) always need upload, even if not staged
+        # - Staged objects are hash-compared against parent
+        # - Unstaged objects with a parent reuse parent data (no upload)
+        if parent_hash is None:
+            # New object — must upload regardless of staging
             changed = True
+        elif staged_names is not None and name not in staged_names:
+            # Existing object not staged — reuse parent
+            changed = False
         else:
             changed = blob_hash != parent_hash
 
@@ -87,6 +106,26 @@ def prepare_push_objects(
             "mesh_binary": mesh_binary,
             "changed": changed,
             "parent_data": parent_data if not changed else {},
+        })
+
+    # ── Carry forward parent objects not in scene ────────────────────────
+    # Objects that existed in the parent but are no longer in the scene
+    # must be preserved in the commit unless explicitly staged for deletion.
+    for name, parent_data in parent_objects.items():
+        if name in scene_names:
+            continue  # Already handled above
+        if name in staged_deletions:
+            continue  # User explicitly removed this object
+
+        # Carry forward with parent paths (no upload needed)
+        result.append({
+            "object_name": name,
+            "object_type": parent_data.get("object_type", "MESH"),
+            "blob_hash": parent_data.get("blob_hash", ""),
+            "metadata": None,
+            "mesh_binary": None,
+            "changed": False,
+            "parent_data": parent_data,
         })
 
     return result

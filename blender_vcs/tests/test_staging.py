@@ -73,3 +73,56 @@ class TestStagingArea:
         self.staging.stage("Cube")
         # Should not raise
         self.staging.validate_for_commit()
+
+    # ── Deletion staging tests ──
+
+    def test_stage_deletion(self):
+        self.staging.stage_deletion("OldLight")
+        assert "OldLight" in self.staging.staged_deletions
+        assert "OldLight" not in self.staging.staged_objects
+
+    def test_stage_deletion_removes_from_staged_objects(self):
+        """Staging a deletion for an object that was staged for add/modify removes it from staged_objects."""
+        self.staging.stage("Cube")
+        self.staging.stage_deletion("Cube")
+        assert "Cube" in self.staging.staged_deletions
+        assert "Cube" not in self.staging.staged_objects
+
+    def test_stage_after_deletion_removes_from_deletions(self):
+        """Re-staging an object for add/modify removes it from staged deletions."""
+        self.staging.stage_deletion("Cube")
+        self.staging.stage("Cube")
+        assert "Cube" in self.staging.staged_objects
+        assert "Cube" not in self.staging.staged_deletions
+
+    def test_unstage_clears_both(self):
+        """Unstaging removes from both staged_objects and staged_deletions."""
+        self.staging.stage("Cube")
+        self.staging.stage_deletion("Light")
+        self.staging.unstage("Cube")
+        self.staging.unstage("Light")
+        assert self.staging.staged_objects == []
+        assert self.staging.staged_deletions == []
+
+    def test_clear_clears_deletions(self):
+        self.staging.stage("Cube")
+        self.staging.stage_deletion("Light")
+        self.staging.clear()
+        assert self.staging.staged_objects == []
+        assert self.staging.staged_deletions == []
+
+    def test_has_staged_changes_with_only_deletions(self):
+        """has_staged_changes returns True when only deletions are staged."""
+        assert not self.staging.has_staged_changes()
+        self.staging.stage_deletion("Light")
+        assert self.staging.has_staged_changes()
+
+    def test_validate_for_commit_with_only_deletions(self):
+        """Commit is valid with only deletions staged."""
+        self.staging.stage_deletion("OldCamera")
+        self.staging.validate_for_commit()  # Should not raise
+
+    def test_validate_for_commit_fails_with_nothing(self):
+        """Commit is blocked with nothing staged."""
+        with pytest.raises(ValueError, match="No objects staged"):
+            self.staging.validate_for_commit()

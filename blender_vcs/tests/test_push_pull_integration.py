@@ -154,6 +154,90 @@ class TestPrepareObjects:
         assert changed[0]["object_name"] == "Cube"
         assert len(unchanged) == 2
 
+    def test_unstaged_new_objects_still_uploaded(self):
+        """New objects not in parent must be uploaded even when not staged."""
+        scene = _make_scene_objects()  # Cube, Camera, Light
+
+        # Parent only had Cube — Camera and Light are new
+        first_cube = prepare_push_objects([scene[0]], parent_objects={})
+        parent_objects = {
+            "Cube": {
+                "blob_hash": first_cube[0]["blob_hash"],
+                "json_data_path": "projects/test/objects/Cube/abc.json",
+                "mesh_data_path": None,
+            }
+        }
+
+        # Only stage Cube, but Camera & Light are new (no parent)
+        result = prepare_push_objects(scene, parent_objects, staged_names={"Cube"})
+
+        names_changed = {o["object_name"] for o in result if o["changed"]}
+        # Camera and Light are new → must be changed (uploaded) even if not staged
+        assert "Camera" in names_changed
+        assert "Light" in names_changed
+        # All 3 objects are in the result
+        assert len(result) == 3
+
+    def test_parent_objects_carried_forward_when_deleted_from_scene(self):
+        """Objects in parent but missing from scene are preserved unless staged for deletion."""
+        scene = _make_scene_objects()  # Cube, Camera, Light
+
+        # First push — all three objects
+        first_result = prepare_push_objects(scene, parent_objects={})
+        parent_objects = {
+            obj["object_name"]: {
+                "blob_hash": obj["blob_hash"],
+                "json_data_path": f"projects/test/objects/{obj['object_name']}/abc.json",
+                "mesh_data_path": None,
+                "object_type": obj["object_type"],
+            }
+            for obj in first_result
+        }
+
+        # Scene now only has Cube (Camera and Light deleted from scene)
+        scene_without_two = [scene[0]]
+
+        # Push without staging any deletions
+        result = prepare_push_objects(
+            scene_without_two, parent_objects, staged_names={"Cube"}, staged_deletions=set()
+        )
+
+        result_names = {o["object_name"] for o in result}
+        # Camera and Light should be carried forward from parent
+        assert result_names == {"Cube", "Camera", "Light"}
+        assert len(result) == 3
+
+    def test_staged_deletion_removes_object_from_commit(self):
+        """Staging a deletion excludes the object from the commit snapshot."""
+        scene = _make_scene_objects()
+
+        first_result = prepare_push_objects(scene, parent_objects={})
+        parent_objects = {
+            obj["object_name"]: {
+                "blob_hash": obj["blob_hash"],
+                "json_data_path": f"projects/test/objects/{obj['object_name']}/abc.json",
+                "mesh_data_path": None,
+                "object_type": obj["object_type"],
+            }
+            for obj in first_result
+        }
+
+        # Scene now only has Cube; Light is explicitly staged for deletion
+        scene_without_two = [scene[0]]
+
+        result = prepare_push_objects(
+            scene_without_two, parent_objects,
+            staged_names={"Cube"},
+            staged_deletions={"Light"},
+        )
+
+        result_names = {o["object_name"] for o in result}
+        # Light is deleted, Camera is carried forward
+        assert "Light" not in result_names
+        assert "Camera" in result_names
+        assert "Cube" in result_names
+        assert len(result) == 2
+
 
 class TestBuildCommitObjectsList:
 
