@@ -73,10 +73,35 @@ export type AddProjectMemberPayload = {
 
 export interface BlenderObject {
   object_id: string;
+  commit_id: string;
   object_name: string;
   object_type: string;
-  file_path: string;
-  commit_id: string;
+  json_data_path: string;
+  mesh_data_path: string | null;
+  parent_object_id: string | null;
+  blob_hash: string;
+  created_at: string;
+}
+
+export type MergeConflict = {
+  conflict_id: string;
+  project_id: string;
+  source_commit_id: string;
+  target_branch_id: string;
+  object_name: string;
+  conflict_type: string;
+  resolved: boolean;
+  created_at: string;
+};
+
+export type ObjectDiffStatus = "added" | "modified" | "deleted" | "unchanged";
+
+export interface ObjectDiffEntry {
+  object_name: string;
+  object_type: string;
+  status: ObjectDiffStatus;
+  blob_hash: string;
+  parent_blob_hash?: string;
 }
 
 async function handleProjectError(res: Response, context: string) {
@@ -312,4 +337,125 @@ export async function declineInvitation(token: string, invitationId: string): Pr
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) await handleProjectError(res, "Decline invitation");
+}
+
+// ============== Object-Level VCS ==============
+
+export async function fetchObjectDownloadUrl(
+  token: string,
+  projectId: string,
+  path: string
+): Promise<{ url: string }> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/objects/download-url?path=${encodeURIComponent(path)}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+  if (!res.ok) await handleProjectError(res, "Get object download URL");
+  return res.json();
+}
+
+/**
+ * Compute a diff between two sets of commit objects.
+ * Returns entries for added, modified, deleted, and unchanged objects.
+ */
+export function computeObjectDiff(
+  currentObjects: BlenderObject[],
+  parentObjects: BlenderObject[]
+): ObjectDiffEntry[] {
+  const parentMap = new Map<string, BlenderObject>();
+  for (const obj of parentObjects) {
+    parentMap.set(obj.object_name, obj);
+  }
+
+  const currentMap = new Map<string, BlenderObject>();
+  for (const obj of currentObjects) {
+    currentMap.set(obj.object_name, obj);
+  }
+
+  const entries: ObjectDiffEntry[] = [];
+
+  // Check current objects against parent
+  for (const obj of currentObjects) {
+    const parentObj = parentMap.get(obj.object_name);
+    if (!parentObj) {
+      entries.push({
+        object_name: obj.object_name,
+        object_type: obj.object_type,
+        status: "added",
+        blob_hash: obj.blob_hash,
+      });
+    } else if (parentObj.blob_hash !== obj.blob_hash) {
+      entries.push({
+        object_name: obj.object_name,
+        object_type: obj.object_type,
+        status: "modified",
+        blob_hash: obj.blob_hash,
+        parent_blob_hash: parentObj.blob_hash,
+      });
+    } else {
+      entries.push({
+        object_name: obj.object_name,
+        object_type: obj.object_type,
+        status: "unchanged",
+        blob_hash: obj.blob_hash,
+      });
+    }
+  }
+
+  // Check for deleted objects (in parent but not in current)
+  for (const obj of parentObjects) {
+    if (!currentMap.has(obj.object_name)) {
+      entries.push({
+        object_name: obj.object_name,
+        object_type: obj.object_type,
+        status: "deleted",
+        blob_hash: obj.blob_hash,
+      });
+    }
+  }
+
+  // Sort: changed items first, then unchanged
+  const order: Record<ObjectDiffStatus, number> = {
+    added: 0,
+    modified: 1,
+    deleted: 2,
+    unchanged: 3,
+  };
+  entries.sort((a, b) => order[a.status] - order[b.status]);
+
+  return entries;
+}
+
+// ============== Merge Conflicts ==============
+
+export async function fetchConflicts(
+  token: string,
+  projectId: string
+): Promise<MergeConflict[]> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/conflicts`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+  if (!res.ok) await handleProjectError(res, "Fetch conflicts");
+  return res.json();
+}
+
+export async function resolveConflict(
+  token: string,
+  projectId: string,
+  conflictId: string
+): Promise<MergeConflict> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/conflicts/${conflictId}`,
+    {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+  if (!res.ok) await handleProjectError(res, "Resolve conflict");
+  return res.json();
 }
