@@ -595,6 +595,16 @@ def reconstruct_scene(objects_data: list, mesh_binaries: dict,
             if obj.name in incoming_names:
                 bpy.data.objects.remove(obj, do_unlink=True)
 
+        # Also remove orphan data-blocks (meshes, cameras, etc.) whose names
+        # match incoming objects.  Without this, bpy.data.meshes.new("Cube")
+        # would auto-rename to "Cube.001" because the old mesh still exists.
+        for name in incoming_names:
+            for collection in (bpy.data.meshes, bpy.data.cameras,
+                               bpy.data.lights, bpy.data.armatures):
+                old = collection.get(name)
+                if old and old.users == 0:
+                    collection.remove(old)
+
     created_objects = {}
 
     # First pass: create all objects
@@ -766,7 +776,11 @@ def reconstruct_scene(objects_data: list, mesh_binaries: dict,
             bl_obj[key] = val
 
         # Link to scene
-        bpy.context.scene.collection.objects.link(bl_obj)
+        try:
+            bpy.context.scene.collection.objects.link(bl_obj)
+        except RuntimeError:
+            # Object may already be linked (e.g. auto-linked by bpy.data.objects.new)
+            pass
         created_objects[name] = bl_obj
 
     # Second pass: parent relationships

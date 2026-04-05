@@ -2066,15 +2066,22 @@ class BVCS_OT_ApplyConflictResolutions(bpy.types.Operator):
             if item.resolution == "KEEP_LOCAL":
                 # Nothing to do — local scene already has this object
                 pass
-            elif item.resolution == "KEEP_REMOTE":
-                # Remove local, will be replaced by downloaded remote
+            elif item.resolution in ("KEEP_REMOTE", "DELETE"):
+                # Remove local object and its orphan data-block
                 local_obj = bpy.data.objects.get(item.object_name)
                 if local_obj:
+                    obj_data_ref = local_obj.data  # mesh/camera/light data
                     bpy.data.objects.remove(local_obj, do_unlink=True)
-            elif item.resolution == "DELETE":
-                local_obj = bpy.data.objects.get(item.object_name)
-                if local_obj:
-                    bpy.data.objects.remove(local_obj, do_unlink=True)
+                    # Remove orphan data-block so the name is freed for re-creation
+                    if obj_data_ref and obj_data_ref.users == 0:
+                        try:
+                            for collection in (bpy.data.meshes, bpy.data.cameras,
+                                               bpy.data.lights, bpy.data.armatures):
+                                if obj_data_ref.name in collection:
+                                    collection.remove(obj_data_ref)
+                                    break
+                        except Exception:
+                            pass
             # KEEP_BOTH: don't remove local, remote will be added with .remote suffix
 
         # Import remote objects into scene
