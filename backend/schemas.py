@@ -2,6 +2,7 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, EmailStr, ConfigDict
 from datetime import datetime
 from uuid import UUID
+from models import MemberRole
 
 # ============== User Schemas ==============
 class UserBase(BaseModel):
@@ -258,7 +259,7 @@ class ProjectMemberAdd(BaseModel):
     """
     email: Optional[EmailStr] = None
     username: Optional[str] = None
-    role: str = "editor"  # viewer / editor / owner
+    role: MemberRole = MemberRole.editor
 
 class ProjectMemberResponse(BaseModel):
     """Response containing project member information"""
@@ -279,7 +280,7 @@ class ProjectMemberRemove(BaseModel):
 
 class MemberRoleUpdate(BaseModel):
     """Schema for changing a member's role"""
-    role: str  # viewer / editor / owner
+    role: MemberRole
 
 class InvitationCreate(ProjectMemberAdd):
     """

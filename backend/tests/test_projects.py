@@ -453,7 +453,7 @@ class TestInvitationFlow:
             json={"email": invitee_email, "role": "superadmin"},
             headers=_h(owner_token),
         )
-        assert r.status_code == 400
+        assert r.status_code == 422
 
     def test_editor_cannot_invite_as_owner(self, client):
         _, owner_token, _, _ = _register_and_login(client)
@@ -594,7 +594,7 @@ class TestMemberManagement:
             json={"role": "superadmin"},
             headers=_h(owner_token),
         )
-        assert r.status_code == 400
+        assert r.status_code == 422
 
     def test_remove_nonexistent_member_returns_404(self, client):
         _, owner_token, _, _ = _register_and_login(client)

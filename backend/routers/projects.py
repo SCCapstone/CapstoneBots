@@ -669,10 +669,6 @@ async def send_invitation(
     Only owners and editors can send invitations.
     Invitations expire after INVITE_EXPIRY_DAYS (default 7).
     """
-    # Validate role value
-    if data.role not in [r.value for r in MemberRole]:
-        raise HTTPException(status_code=400, detail=f"Invalid role: {data.role}. Must be viewer, editor, or owner.")
-
     # Check caller has at least editor access
     project, caller_role = await check_project_access(
         project_id, current_user.user_id, db, require_role=MemberRole.editor
@@ -811,10 +807,7 @@ async def add_project_member(
     that the invitee must accept. For immediate access, use the invitation
     accept endpoint.
     """
-    # Validate role
-    role = member_data.role or MemberRole.editor.value
-    if role not in [r.value for r in MemberRole]:
-        raise HTTPException(status_code=400, detail=f"Invalid role: {role}")
+    role = member_data.role
 
     project, caller_role = await check_project_access(
         project_id, current_user.user_id, db, require_role=MemberRole.editor
@@ -933,9 +926,6 @@ async def update_member_role(
     current_user: User = Depends(get_current_user),
 ):
     """Change a member's role. Only the project owner can change roles."""
-    if data.role not in [r.value for r in MemberRole]:
-        raise HTTPException(status_code=400, detail=f"Invalid role: {data.role}")
-
     project, _ = await check_project_access(
         project_id, current_user.user_id, db, require_owner=True
     )
