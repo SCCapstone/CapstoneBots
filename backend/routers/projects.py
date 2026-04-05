@@ -802,84 +802,22 @@ async def add_project_member(
 ):
     """
     Add a user to a project by email or username (creates an invitation).
-    
-    This endpoint maintains backward compatibility: it sends an invitation
-    that the invitee must accept. For immediate access, use the invitation
-    accept endpoint.
+
+    Backward-compatible wrapper around the invitation flow.
+    Delegates to send_invitation and maps the response to ProjectMemberResponse.
     """
-    role = member_data.role
+    invitation_data = InvitationCreate(**member_data.model_dump())
+    inv_response = await send_invitation(project_id, invitation_data, db, current_user)
 
-    project, caller_role = await check_project_access(
-        project_id, current_user.user_id, db, require_role=MemberRole.editor
-    )
-
-    # Only project owners may assign the owner role when inviting members
-    if role == MemberRole.owner.value and caller_role != MemberRole.owner:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only project owners can assign the owner role.",
-        )
-    # Resolve user
-    if not member_data.email and not member_data.username:
-        raise HTTPException(status_code=400, detail="Provide either email or username.")
-
-    if member_data.email:
-        result = await db.execute(select(User).where(User.email == member_data.email))
-    else:
-        result = await db.execute(select(User).where(User.username == member_data.username))
-    user_to_add = result.scalars().first()
-
-    if not user_to_add:
-        raise HTTPException(status_code=404, detail="No user found with that email or username.")
-
-    # Prevent self-invitation
-    if user_to_add.user_id == current_user.user_id:
-        raise HTTPException(status_code=400, detail="You cannot invite yourself to a project.")
-    # Check already member
-    existing = await db.execute(
-        select(ProjectMember).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == user_to_add.user_id,
-        )
-    )
-    if existing.scalars().first():
-        raise HTTPException(status_code=409, detail="User is already a member of this project.")
-
-    # Check for pending invite
-    existing_inv = await db.execute(
-        select(ProjectInvitation).where(
-            ProjectInvitation.project_id == project_id,
-            ProjectInvitation.invitee_email == user_to_add.email,
-            ProjectInvitation.status == InvitationStatus.pending.value,
-        )
-    )
-    if existing_inv.scalars().first():
-        raise HTTPException(status_code=409, detail="A pending invitation already exists for this user.")
-
-    # Create invitation
-    invitation = ProjectInvitation(
-        project_id=project_id,
-        inviter_id=current_user.user_id,
-        invitee_id=user_to_add.user_id,
-        invitee_email=user_to_add.email,
-        role=role,
-        status=InvitationStatus.pending.value,
-        expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=INVITE_EXPIRY_DAYS),
-    )
-    db.add(invitation)
-    await db.commit()
-    await db.refresh(invitation)
-
-    # Return a ProjectMemberResponse-shaped object so frontend compatibility is kept
     return ProjectMemberResponse(
-        member_id=invitation.invitation_id,  # use invitation_id as member_id for compat
-        project_id=invitation.project_id,
-        user_id=user_to_add.user_id,
-        username=user_to_add.username,
-        email=user_to_add.email,
-        role=invitation.role,
-        added_at=invitation.created_at,
-        added_by=current_user.user_id,
+        member_id=inv_response.invitation_id,
+        project_id=inv_response.project_id,
+        user_id=inv_response.invitee_id,
+        username=inv_response.invitee_username or "",
+        email=inv_response.invitee_email,
+        role=inv_response.role,
+        added_at=inv_response.created_at,
+        added_by=inv_response.inviter_id,
     )
 
 
