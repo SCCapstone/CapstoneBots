@@ -21,6 +21,16 @@ const localStorageMock = (() => {
 })();
 Object.defineProperty(window, "localStorage", { value: localStorageMock });
 
+/** Build a fake JWT whose payload contains the given claims. */
+function fakeJwt(payload: Record<string, unknown>): string {
+  const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const body = btoa(JSON.stringify(payload));
+  return `${header}.${body}.fakesig`;
+}
+
+/** A token that expires far in the future. */
+const VALID_TOKEN = fakeJwt({ sub: "user@test.com", exp: Math.floor(Date.now() / 1000) + 3600 });
+
 function TestConsumer() {
   const { token, hydrated, isAuthenticated, login, logout } = useAuth();
   return (
@@ -83,7 +93,7 @@ describe("AuthProvider", () => {
   });
 
   it("restores token from localStorage on mount", async () => {
-    localStorageMock.getItem.mockReturnValueOnce("saved-token");
+    localStorageMock.getItem.mockReturnValueOnce(VALID_TOKEN);
 
     render(
       <AuthProvider>
@@ -92,7 +102,7 @@ describe("AuthProvider", () => {
     );
 
     // After useEffect runs
-    expect(screen.getByTestId("token").textContent).toBe("saved-token");
+    expect(screen.getByTestId("token").textContent).toBe(VALID_TOKEN);
     expect(screen.getByTestId("authenticated").textContent).toBe("true");
   });
 });
