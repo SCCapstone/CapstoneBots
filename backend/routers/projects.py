@@ -467,66 +467,66 @@ async def unlock_object(
     await db.delete(lock)
     await db.commit()
 
-# ============== Merge Conflict Routes ==============
-
-@router.post("/{project_id}/conflicts", response_model=MergeConflictResponse, status_code=status.HTTP_201_CREATED)
-async def create_conflict(
-        project_id: UUID,
-        data: MergeConflictCreate,
-        db: AsyncSession = Depends(get_db),
-        current_user: User = Depends(get_current_user),
-):
-    """Record a merge conflict detected by the addon (editors and above)."""
-    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
-    conflict = MergeConflict(
-        project_id=project_id,
-        source_commit_id=data.source_commit_id,
-        target_branch_id=data.target_branch_id,
-        object_name=data.object_name,
-        conflict_type=data.conflict_type,
-    )
-    db.add(conflict)
-    await db.commit()
-    await db.refresh(conflict)
-    return conflict
-
-
-@router.get("/{project_id}/conflicts", response_model=List[MergeConflictResponse])
-async def get_unresolved_conflicts(
-        project_id: UUID,
-        db: AsyncSession = Depends(get_db),
-        current_user: User = Depends(get_current_user),
-):
-    """Get all unresolved merge conflicts in a project (members only)."""
-    await check_project_access(project_id, current_user.user_id, db)
-    query = (
-        select(MergeConflict)
-        .where(
-            MergeConflict.project_id == project_id,
-            MergeConflict.resolved == False,
-            )
-        .order_by(MergeConflict.created_at)
-    )
-    result = await db.execute(query)
-    return result.scalars().all()
-
-@router.put("/{project_id}/conflicts/{conflict_id}", response_model=MergeConflictResponse)
-async def resolve_conflict(
-        project_id: UUID,
-        conflict_id: UUID,
-        db: AsyncSession = Depends(get_db),
-        current_user: User = Depends(get_current_user),
-):
-    """Mark a merge conflict as resolved (editors and above)."""
-    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
-    conflict = await db.get(MergeConflict, conflict_id)
-    if not conflict or conflict.project_id != project_id:
-        raise HTTPException(status_code=404, detail="Conflict not found")
-    conflict.resolved = True
-    await db.commit()
-    await db.refresh(conflict)
-    return conflict
-
+# # ============== Merge Conflict Routes ==============
+# 
+# @router.post("/{project_id}/conflicts", response_model=MergeConflictResponse, status_code=status.HTTP_201_CREATED)
+# async def create_conflict(
+#         project_id: UUID,
+#         data: MergeConflictCreate,
+#         db: AsyncSession = Depends(get_db),
+#         current_user: User = Depends(get_current_user),
+# ):
+#     """Record a merge conflict detected by the addon (editors and above)."""
+#     await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+#     conflict = MergeConflict(
+#         project_id=project_id,
+#         source_commit_id=data.source_commit_id,
+#         target_branch_id=data.target_branch_id,
+#         object_name=data.object_name,
+#         conflict_type=data.conflict_type,
+#     )
+#     db.add(conflict)
+#     await db.commit()
+#     await db.refresh(conflict)
+#     return conflict
+# 
+# 
+# @router.get("/{project_id}/conflicts", response_model=List[MergeConflictResponse])
+# async def get_unresolved_conflicts(
+#         project_id: UUID,
+#         db: AsyncSession = Depends(get_db),
+#         current_user: User = Depends(get_current_user),
+# ):
+#     """Get all unresolved merge conflicts in a project (members only)."""
+#     await check_project_access(project_id, current_user.user_id, db)
+#     query = (
+#         select(MergeConflict)
+#         .where(
+#             MergeConflict.project_id == project_id,
+#             MergeConflict.resolved == False,
+#             )
+#         .order_by(MergeConflict.created_at)
+#     )
+#     result = await db.execute(query)
+#     return result.scalars().all()
+# 
+# @router.put("/{project_id}/conflicts/{conflict_id}", response_model=MergeConflictResponse)
+# async def resolve_conflict(
+#         project_id: UUID,
+#         conflict_id: UUID,
+#         db: AsyncSession = Depends(get_db),
+#         current_user: User = Depends(get_current_user),
+# ):
+#     """Mark a merge conflict as resolved (editors and above)."""
+#     await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+#     conflict = await db.get(MergeConflict, conflict_id)
+#     if not conflict or conflict.project_id != project_id:
+#         raise HTTPException(status_code=404, detail="Conflict not found")
+#     conflict.resolved = True
+#     await db.commit()
+#     await db.refresh(conflict)
+#     return conflict
+# 
 
 # ============== Project Collaboration Routes ==============
 
