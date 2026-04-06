@@ -438,6 +438,49 @@ def upload_file_to_s3(local_file_path, bucket, s3_key_prefix, client):
         logger.error(f"Failed to upload file to S3: {e}")
         return None
 
+# ---------------- Token Refresh ----------------
+# Refresh interval: 50 minutes (token lifetime defaults to 60 min)
+_TOKEN_REFRESH_INTERVAL = 50 * 60  # seconds
+
+def _refresh_token():
+    """Periodically refresh the JWT token. Registered with bpy.app.timers."""
+    try:
+        prefs_container = bpy.context.preferences.addons.get(BL_ID)
+        if not prefs_container:
+            return None  # stop timer — addon unregistered
+        prefs = prefs_container.preferences
+        token = getattr(prefs, "auth_token", None)
+        if not token:
+            return None  # stop timer — logged out
+
+        resp = requests.post(
+            f"{get_api_base(prefs)}/api/auth/refresh",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            new_token = resp.json().get("access_token")
+            if new_token:
+                prefs.auth_token = new_token
+                logger.info("Token refreshed successfully")
+        else:
+            logger.warning(f"Token refresh failed (HTTP {resp.status_code})")
+    except Exception as e:
+        logger.warning(f"Token refresh error: {e}")
+    return _TOKEN_REFRESH_INTERVAL  # schedule next refresh
+
+
+def _start_token_refresh_timer():
+    """Start the periodic token refresh timer if not already running."""
+    if not bpy.app.timers.is_registered(_refresh_token):
+        bpy.app.timers.register(_refresh_token, first_interval=_TOKEN_REFRESH_INTERVAL, persistent=True)
+
+
+def _stop_token_refresh_timer():
+    """Stop the periodic token refresh timer."""
+    if bpy.app.timers.is_registered(_refresh_token):
+        bpy.app.timers.unregister(_refresh_token)
+
 # ---------------- Operators ----------------
 class BVCS_OT_Login(bpy.types.Operator):
     bl_idname = "bvcs.login"
@@ -463,6 +506,8 @@ class BVCS_OT_Login(bpy.types.Operator):
                 logger.info("Login successful")
                 # fetch S3 credentials for this user automatically
                 fetch_user_s3_credentials(prefs)
+                # Start periodic token refresh
+                _start_token_refresh_timer()
             else:
                 self.report({'ERROR'}, f"Login failed: {resp.status_code}")
         except Exception as e:
@@ -477,6 +522,7 @@ class BVCS_OT_Logout(bpy.types.Operator):
     bl_label = "Logout"
 
     def execute(self, context):
+        _stop_token_refresh_timer()
         prefs = get_prefs(context)
         prefs.auth_token = ""
         prefs.project_id = ""

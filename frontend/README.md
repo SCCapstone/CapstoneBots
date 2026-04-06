@@ -76,6 +76,34 @@ src/
     └── projectsApi.ts            # Projects API client (CRUD, invitations, files)
 ```
 
+## Testing
+
+Tests use **Jest** with **React Testing Library** and live in `src/__tests__/`.
+
+```bash
+npm install
+
+# Run all tests
+npm test
+
+# Run in watch mode
+npm run test:watch
+
+# Run with CI reporter
+npm run test:ci
+```
+
+**API client tests:**
+- `src/__tests__/authApi.test.ts` — Login, signup, delete account API functions (14 tests)
+- `src/__tests__/projectsApi.test.ts` — Projects, commits, members, invitations API functions (11 tests)
+
+**UI / behavioral tests:**
+- `src/__tests__/LoginPage.test.tsx` — Login form rendering, submission, error display, navigation (8 tests)
+- `src/__tests__/SignupPage.test.tsx` — Signup form rendering, validation, submission, navigation (8 tests)
+- `src/__tests__/HomePage.test.tsx` — Landing page content and navigation links (4 tests)
+- `src/__tests__/CommitItem.test.tsx` — Commit display, hash truncation, date formatting (5 tests)
+- `src/__tests__/AuthProvider.test.tsx` — Auth context: login, logout, token persistence (4 tests)
+
 ## Deployment
 
 For production deployment to Vercel, see the [Deployment Guide](../DEPLOYMENT.md).

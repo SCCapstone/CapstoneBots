@@ -173,6 +173,17 @@ async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(
     return {"access_token": access_token, "token_type": "bearer"}
 
 
+@router.post("/refresh", response_model=schemas.Token)
+async def refresh_token(current_user: User = Depends(get_current_user)):
+    """
+    Issue a fresh access token for an authenticated user.
+
+    The caller must present a valid (non-expired) Bearer token.
+    A new token with a full expiry window is returned.
+    """
+    access_token = create_access_token(data={"sub": current_user.email})
+    return {"access_token": access_token, "token_type": "bearer"}
+
 @router.post("/verify-email")
 async def verify_email(body: schemas.VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
     """

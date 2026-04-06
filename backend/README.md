@@ -115,17 +115,28 @@ Tests use **pytest** and live in `tests/`.
 
 ```bash
 source .venv/bin/activate
-pytest -v
+pip install -r requirements.txt
+
+# Run all tests (integration tests auto-skip when DB is not available)
+pytest tests/ -v --ignore=tests/test_storage.py
+
+# Run only unit tests (no external services needed)
+pytest tests/test_unit_auth.py tests/test_unit_models.py tests/test_unit_schemas.py tests/test_unit_schemas_extended.py tests/test_unit_storage_utils.py -v
 ```
 
-Test files:
-- `tests/test_auth.py` — Authentication flows
-- `tests/test_behavior_projects_auth.py` — Project authorization
-- `tests/test_delete_account.py` — Account deletion
-- `tests/test_storage.py` — Storage utilities
-- `tests/test_unit_schemas.py` — Schema validation
+**Unit tests** (no database or services required):
+- `tests/test_unit_auth.py` — Password hashing, JWT token creation/validation (28 tests)
+- `tests/test_unit_models.py` — Role hierarchy, invitation status, member role parsing (14 tests)
+- `tests/test_unit_schemas.py` — Core Pydantic schema validation (4 tests)
+- `tests/test_unit_schemas_extended.py` — Extended schema validation with edge cases (36 tests)
+- `tests/test_unit_storage_utils.py` — Content hashing, path parsing, file size formatting, JSON validation (40 tests)
 
-> Some integration tests are skipped unless MinIO is running.
+**Behavioral / integration tests** (require PostgreSQL — auto-skip when unavailable):
+- `tests/test_auth.py` — Authentication flows (4 tests)
+- `tests/test_behavior_api.py` — API endpoint flows: auth, projects, health check (23 tests)
+- `tests/test_behavior_projects_auth.py` — Project access control and collaboration (15 tests)
+- `tests/test_delete_account.py` — Account deletion with cleanup (3 tests)
+- `tests/test_storage.py` — S3/MinIO storage operations (requires MinIO)
 
 ## Related Documentation
 
