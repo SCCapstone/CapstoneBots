@@ -22,7 +22,9 @@ import {
   fetchObjectDownloadUrl,
   fetchConflicts,
   resolveConflict,
+  fetchObjectContent,
 } from "@/lib/projectsApi";
+import { downloadGlbFromStoredJson } from "@/lib/downloadGlb";
 import { fetchCurrentUser } from "@/lib/authApi";
 
 function formatCommitDate(dateString: string): string {
@@ -35,7 +37,7 @@ async function loadCommitsWithUsers(
   token: string,
   projectId: string
 ): Promise<Commit[]> {
-  const rawCommits = await fetchCommits(token, projectId, "main");
+  const rawCommits = await fetchCommits(token, projectId);
   const me = await fetchCurrentUser(token);
   return rawCommits.map((c) => ({
     ...c,
@@ -203,7 +205,31 @@ export default function ProjectPage() {
     }
   };
 
-  const handleDownloadObject = async (obj: BlenderObject) => {
+  const handleDownloadGlb = async (obj: BlenderObject) => {
+    if (!token) return;
+    try {
+      // Fetch metadata JSON via backend proxy (avoids S3 CORS)
+      const metaRes = await fetchObjectContent(token, projectId, obj.json_data_path);
+      const metadataJson = await metaRes.json();
+
+      // Fetch geometry JSON if mesh exists
+      let geometryJson = {};
+      if (obj.mesh_data_path) {
+        const meshRes = await fetchObjectContent(token, projectId, obj.mesh_data_path);
+        geometryJson = await meshRes.json();
+      }
+
+      downloadGlbFromStoredJson(
+        metadataJson,
+        geometryJson,
+        `${obj.object_name}.glb`
+      );
+    } catch (err) {
+      console.error("GLB download failed:", err);
+    }
+  };
+
+  const handleDownloadJson = async (obj: BlenderObject) => {
     if (!token) return;
     try {
       const data = await fetchObjectDownloadUrl(token, projectId, obj.json_data_path);
@@ -326,13 +352,13 @@ export default function ProjectPage() {
             </div>
           </div>
 
-          {/* Branch / last commit bar */}
+          {/* Last commit bar */}
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-xs">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-3">
                 <button className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200 hover:border-slate-500">
                   <span className="h-2 w-2 rounded-full bg-green-500" />
-                  <span>main</span>
+                  <span>history</span>
                 </button>
                 {commits.length > 0 ? (
                   <p className="text-slate-400">
@@ -379,30 +405,24 @@ export default function ProjectPage() {
                       {obj.blob_hash.slice(0, 12)}…
                     </div>
                     <div className="flex items-center gap-1 justify-end">
+                      {obj.mesh_data_path && (
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadGlb(obj)}
+                          className="rounded border border-violet-500/50 px-2 py-0.5 text-[10px] text-violet-300 transition hover:bg-violet-500/10"
+                          title="Download as GLB (3D model)"
+                        >
+                          GLB
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={() => handleDownloadObject(obj)}
+                        onClick={() => handleDownloadJson(obj)}
                         className="rounded border border-sky-500/50 px-2 py-0.5 text-[10px] text-sky-300 transition hover:bg-sky-500/10"
                         title="Download JSON metadata"
                       >
                         JSON
                       </button>
-                      {obj.mesh_data_path && (
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            if (!token || !obj.mesh_data_path) return;
-                            try {
-                              const data = await fetchObjectDownloadUrl(token, projectId, obj.mesh_data_path);
-                              if (data.url) window.open(data.url, "_blank");
-                            } catch { }
-                          }}
-                          className="rounded border border-emerald-500/50 px-2 py-0.5 text-[10px] text-emerald-300 transition hover:bg-emerald-500/10"
-                          title="Download mesh binary"
-                        >
-                          Mesh
-                        </button>
-                      )}
                     </div>
                   </div>
                 ))

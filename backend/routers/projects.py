@@ -4,7 +4,6 @@ Project Management Routes
 This module handles all project-related endpoints for the CapstoneBots API.
 It provides Git-like version control functionality for Blender projects, including:
 - Project CRUD operations
-- Branch management
 - Commit history and creation
 - Object locking (preventing concurrent edits)
 - Merge conflict tracking
@@ -24,13 +23,12 @@ from sqlalchemy.orm import joinedload
 
 from database import get_db
 from models import (
-    Project, Branch, Commit, BlenderObject, ObjectLock, MergeConflict,
+    Project, Commit, BlenderObject, ObjectLock, MergeConflict,
     User, ProjectMember, ProjectInvitation,
     MemberRole, InvitationStatus, INVITE_EXPIRY_DAYS, role_at_least,
 )
 from schemas import (
     ProjectCreate, ProjectResponse, ProjectUpdate, ProjectBase,
-    BranchCreate, BranchResponse,
     CommitCreate, CommitResponse, CommitCreateRequest,
     BlenderObjectCreate, BlenderObjectResponse,
     ObjectLockCreate, ObjectLockResponse,
@@ -108,8 +106,7 @@ async def create_project(
     """
     Create a new Blender project with version control.
     
-    This endpoint creates a new project and automatically initializes it with a
-    'main' branch (similar to Git's default branch). The authenticated user becomes
+    This endpoint creates a new project. The authenticated user becomes
     the project owner.
     
     Args:
@@ -138,15 +135,6 @@ async def create_project(
     )
     db.add(new_project)
     await db.flush()  # Flush to get the project_id without committing yet
-
-    # Automatically create a default 'main' branch (like Git init)
-    # This is the starting point for all commits in the project
-    main_branch = Branch(
-        project_id=new_project.project_id,
-        branch_name="main",
-        created_by=new_project.owner_id,
-    )
-    db.add(main_branch)
     
     # Add the owner as a project member with "owner" role
     # This ensures the owner appears in the members list and collaboration system works consistently
@@ -158,7 +146,7 @@ async def create_project(
     )
     db.add(owner_member)
     
-    await db.commit()  # Commit project, branch, and membership together
+    await db.commit()
     await db.refresh(new_project)  # Refresh to get all generated fields
     return new_project
 
@@ -201,111 +189,22 @@ async def delete_project(
     await delete_project_data(db, project_id)
     await db.commit()
 
-# ============== Branch Routes ==============
-
-@router.get("/{project_id}/branches", response_model=List[BranchResponse])
-async def get_project_branches(
-    project_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Get all branches in a project (members only)."""
-    await check_project_access(project_id, current_user.user_id, db)
-    query = (
-        select(Branch)
-        .where(Branch.project_id == project_id)
-        .order_by(Branch.created_at)
-    )
-    result = await db.execute(query)
-    return result.scalars().all()
-
-@router.post("/{project_id}/branches", response_model=BranchResponse, status_code=status.HTTP_201_CREATED)
-async def create_branch(
-    project_id: UUID,
-    req: BranchCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Create a new branch in a project (similar to 'git branch <name>').
-    
-    This endpoint creates a new branch for parallel development. Branches are used
-    when team members want to work on features independently without affecting the
-    main branch. Each branch can have its own series of commits.
-    
-    Args:
-        project_id: UUID of the parent project
-        branch: BranchCreate schema containing branch name and creator info
-        db: Database session dependency
-        
-    Returns:
-        BranchResponse: Created branch details
-        
-    Raises:
-        HTTPException 404: If parent project doesn't exist
-        
-    Example:
-        POST /api/projects/123e4567-e89b-12d3-a456-426614174000/branches
-        {
-            "branch_name": "feature-lighting",
-            "created_by": "user-id"
-        }
-    """
-    # Validate branch name
-    branch_name = req.name.strip() if req.name else ""
-    if not branch_name:
-        raise HTTPException(status_code=400, detail="Branch name cannot be empty")
-    if len(branch_name) > 255:
-        raise HTTPException(status_code=400, detail="Branch name too long (max 255 characters)")
-    if "/" in branch_name:
-        raise HTTPException(status_code=400, detail="Branch name cannot contain slashes")
-
-    # Editors and above can create branches
-    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
-
-    # Create new branch within the project
-    new_branch = Branch(
-        project_id=project_id,
-        branch_name=branch_name,
-        parent_branch_id=req.parent_branch_id,
-        created_by=current_user.user_id,
-    )
-    db.add(new_branch)
-    await db.commit()
-    await db.refresh(new_branch)
-
-    return new_branch
-
 # ============== Commit Routes ==============
 
 @router.get("/{project_id}/commits", response_model=List[CommitResponse])
 async def get_commit_history(
         project_id: UUID,
-        branch_name: str = "main",
         db: AsyncSession = Depends(get_db),
         current_user: User = Depends(get_current_user),
 ):
-    """Get commit history for a branch (members only)."""
+    """Get commit history for a project (members only)."""
     await check_project_access(project_id, current_user.user_id, db)
 
-    # 2) Find the branch for this project + name
-    branch_result = await db.execute(
-        select(Branch).where(
-            Branch.project_id == project_id,
-            Branch.branch_name == branch_name,
-            )
-    )
-    branch = branch_result.scalar_one_or_none()
-    if branch is None:
-        # No such branch -> no commits
-        return []
-
-    # 3) Get commits for that branch, newest first
+    # Get commits for this project, newest first
     commits_result = await db.execute(
         select(Commit)
         .where(
             Commit.project_id == project_id,
-            Commit.branch_id == branch.branch_id,
             )
         .options(joinedload(Commit.author))  # keep eager-loaded author
         .order_by(Commit.committed_at.desc())
@@ -317,7 +216,7 @@ async def get_commit_history(
 @router.post("/{project_id}/commits", response_model=CommitResponse, status_code=status.HTTP_201_CREATED)
 async def create_commit(
     project_id: UUID,
-    data: CommitCreateRequest,  # <- use the request model with branch_id, commit_message, objects
+    data: CommitCreateRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -331,18 +230,17 @@ async def create_commit(
     - List of modified Blender objects with their data
     - Commit message describing the changes
     
-    The commit becomes the new HEAD of the branch, moving the branch pointer forward.
+    Commits form a single linear history per project.
     
     Args:
         project_id: UUID of the project
-        data: CommitCreateRequest with branch_id, message, and objects
+        data: CommitCreateRequest with message and objects
         db: Database session dependency
         
     Returns:
         CommitResponse: Created commit details with generated hash
         
     Raises:
-        HTTPException 404: If branch doesn't exist
         HTTPException 423: If any object being committed is locked by another user
     """
 
@@ -352,12 +250,15 @@ async def create_commit(
     if not data.objects:
         raise HTTPException(status_code=400, detail="Commit must include at least one object")
 
-    # Verify the branch exists and belongs to this project
-    branch = await db.get(Branch, data.branch_id)
-    if not branch or branch.project_id != project_id:
-        raise HTTPException(status_code=404, detail="Branch not found")
-
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    latest_commit_result = await db.execute(
+        select(Commit)
+        .where(Commit.project_id == project_id)
+        .order_by(Commit.committed_at.desc())
+        .limit(1)
+    )
+    latest_commit = latest_commit_result.scalar_one_or_none()
 
     # Enforce object locks
     for obj_data in data.objects:
@@ -367,7 +268,6 @@ async def create_commit(
             .where(
                 ObjectLock.project_id == project_id,
                 ObjectLock.object_name == obj_name,
-                ObjectLock.branch_id == data.branch_id,
             )
         )
         lock_result = await db.execute(lock_query)
@@ -391,7 +291,7 @@ async def create_commit(
 
     # Generate unique commit hash using SHA256
     commit_content = (
-        f"{project_id}{data.branch_id}{current_user.user_id}"
+        f"{project_id}{current_user.user_id}"
         f"{data.commit_message}{now.isoformat()}"
     )
     commit_hash = hashlib.sha256(commit_content.encode()).hexdigest()
@@ -399,8 +299,7 @@ async def create_commit(
     # Create the commit record
     new_commit = Commit(
         project_id=project_id,
-        branch_id=data.branch_id,
-        parent_commit_id=branch.head_commit_id,
+        parent_commit_id=latest_commit.commit_id if latest_commit else None,
         author_id=current_user.user_id,
         commit_message=data.commit_message,
         commit_hash=commit_hash,
@@ -418,9 +317,6 @@ async def create_commit(
             **obj_data.model_dump()
         )
         db.add(blender_obj)
-    
-    # Update the branch HEAD pointer to this new commit
-    branch.head_commit_id = new_commit.commit_id
     
     await db.commit()
     await db.refresh(new_commit)
@@ -497,7 +393,7 @@ async def lock_object(
     """
     Lock a Blender object to prevent concurrent edits.
     
-    This endpoint creates an exclusive lock on a specific object within a branch.
+    This endpoint creates an exclusive lock on a specific object within a project.
     Only the user who holds the lock can edit the object. This prevents merge
     conflicts and ensures data integrity in collaborative environments.
     
@@ -506,7 +402,7 @@ async def lock_object(
     
     Args:
         project_id: UUID of the project
-        lock_data: ObjectLockCreate with object_name, branch_id, expires_at
+        lock_data: ObjectLockCreate with object_name and expires_at
         db: Database session dependency
         
     Returns:
@@ -519,20 +415,18 @@ async def lock_object(
         POST /api/projects/123e4567-e89b-12d3-a456-426614174000/locks
         {
             "object_name": "Cube",
-            "branch_id": "branch-uuid",
             "expires_at": "2025-12-02T16:00:00"
         }
     """
     # Editors and above can acquire locks
     await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
 
-    # Check if the object is already locked in this branch
+    # Check if the object is already locked in this project
     existing_lock = (
         select(ObjectLock)
         .where(
             ObjectLock.project_id == project_id,
             ObjectLock.object_name == lock_data.object_name,
-            ObjectLock.branch_id == lock_data.branch_id,
         )
     )
     result = await db.execute(existing_lock)
@@ -544,7 +438,6 @@ async def lock_object(
         project_id=project_id,
         object_name=lock_data.object_name,
         locked_by=current_user.user_id,  # Infer from auth token
-        branch_id=lock_data.branch_id,
         expires_at=lock_data.expires_at,
     )
     db.add(new_lock)

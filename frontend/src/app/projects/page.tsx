@@ -183,11 +183,6 @@ export default function ProjectsPage() {
                 <h2 className="text-sm font-semibold text-slate-50 group-hover:text-sky-200">
                   {project.name}
                 </h2>
-                {project.default_branch && (
-                  <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
-                    {project.default_branch}
-                  </span>
-                )}
               </div>
 
               {project.description && (

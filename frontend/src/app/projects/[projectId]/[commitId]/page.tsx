@@ -14,8 +14,10 @@ import {
   fetchCommits,
   fetchCommitObjects,
   fetchObjectDownloadUrl,
+  fetchObjectContent,
   computeObjectDiff,
 } from "@/lib/projectsApi";
+import { downloadGlbFromStoredJson } from "@/lib/downloadGlb";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   added: { label: "+", color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/30" },
@@ -93,12 +95,30 @@ export default function CommitDetailPage() {
     load();
   }, [token, projectId, commitId]);
 
-  const handleDownload = async (path: string) => {
+  const handleDownloadJson = async (path: string) => {
     if (!token) return;
     try {
       const data = await fetchObjectDownloadUrl(token, projectId, path);
       if (data.url) window.open(data.url, "_blank");
     } catch { }
+  };
+
+  const handleDownloadGlb = async (obj: BlenderObject) => {
+    if (!token) return;
+    try {
+      const metaRes = await fetchObjectContent(token, projectId, obj.json_data_path);
+      const metadataJson = await metaRes.json();
+
+      let geometryJson = {};
+      if (obj.mesh_data_path) {
+        const meshRes = await fetchObjectContent(token, projectId, obj.mesh_data_path);
+        geometryJson = await meshRes.json();
+      }
+
+      downloadGlbFromStoredJson(metadataJson, geometryJson, `${obj.object_name}.glb`);
+    } catch (err) {
+      console.error("GLB download failed:", err);
+    }
   };
 
   // Build a map of objects by name for quick lookup
@@ -275,24 +295,24 @@ export default function CommitDetailPage() {
                         <div className="flex items-center gap-1 justify-end">
                           {obj && entry.status !== "deleted" && (
                             <>
+                              {obj.mesh_data_path && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadGlb(obj)}
+                                  className="rounded border border-violet-500/40 px-2 py-0.5 text-[10px] text-violet-300 transition hover:bg-violet-500/10"
+                                  title="Download as GLB (3D model)"
+                                >
+                                  GLB
+                                </button>
+                              )}
                               <button
                                 type="button"
-                                onClick={() => handleDownload(obj.json_data_path)}
+                                onClick={() => handleDownloadJson(obj.json_data_path)}
                                 className="rounded border border-sky-500/40 px-2 py-0.5 text-[10px] text-sky-300 transition hover:bg-sky-500/10"
                                 title="Download JSON metadata"
                               >
                                 JSON
                               </button>
-                              {obj.mesh_data_path && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDownload(obj.mesh_data_path!)}
-                                  className="rounded border border-emerald-500/40 px-2 py-0.5 text-[10px] text-emerald-300 transition hover:bg-emerald-500/10"
-                                  title="Download mesh binary"
-                                >
-                                  Mesh
-                                </button>
-                              )}
                             </>
                           )}
                           {entry.status === "deleted" && (

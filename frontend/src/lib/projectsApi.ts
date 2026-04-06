@@ -6,14 +6,12 @@ export type Project = {
   name: string;
   description?: string;
   created_at?: string;
-  default_branch?: string;
   updated_at?: string;
 };
 
 export type Commit = {
   commit_id: string;
   project_id: string;
-  branch_id: string;
   parent_commit_id: string | null;
   author_id: string;
   commit_hash: string;
@@ -178,16 +176,12 @@ export async function deleteProject(token: string, id: string): Promise<void> {
 
 export async function fetchCommits(
   token: string,
-  projectId: string,
-  branchName = "main"
+  projectId: string
 ): Promise<Commit[]> {
-  const res = await fetch(
-    `${API_BASE}/api/projects/${projectId}/commits?branch_name=${encodeURIComponent(branchName)}`,
-    {
-      method: "GET",
-      headers: { Authorization: `Bearer ${token}` },
-    }
-  );
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/commits`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}` },
+  });
   if (!res.ok) await handleProjectError(res, "Fetch commits");
   return res.json();
 }
@@ -426,6 +420,25 @@ export function computeObjectDiff(
   entries.sort((a, b) => order[a.status] - order[b.status]);
 
   return entries;
+}
+
+/**
+ * Fetch raw object content (JSON or mesh binary) proxied through the backend.
+ * Avoids S3 CORS issues for in-browser processing (e.g. GLB export).
+ */
+export async function fetchObjectContent(
+  token: string,
+  projectId: string,
+  path: string
+): Promise<Response> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/objects/content?path=${encodeURIComponent(path)}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+  if (!res.ok) await handleProjectError(res, "Fetch object content");
+  return res;
 }
 
 // ============== Merge Conflicts ==============

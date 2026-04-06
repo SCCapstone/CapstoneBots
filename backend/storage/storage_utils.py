@@ -31,7 +31,7 @@ class StorageUtils:
         return hashlib.sha256(content).hexdigest()
 
     @staticmethod
-    def compute_commit_hash(project_id: str, branch_id: str, author_id: str,
+    def compute_commit_hash(project_id: str, author_id: str,
                           message: str, timestamp: str) -> str:
         """
         Compute commit hash for versioning.
@@ -41,7 +41,6 @@ class StorageUtils:
         
         Args:
             project_id: Project UUID
-            branch_id: Branch UUID
             author_id: Author UUID
             message: Commit message
             timestamp: Commit timestamp
@@ -49,7 +48,7 @@ class StorageUtils:
         Returns:
             str: Hex-encoded SHA256 hash
         """
-        content = f"{project_id}{branch_id}{author_id}{message}{timestamp}".encode('utf-8')
+        content = f"{project_id}{author_id}{message}{timestamp}".encode('utf-8')
         return hashlib.sha256(content).hexdigest()
 
     @staticmethod
