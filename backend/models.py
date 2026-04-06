@@ -79,7 +79,6 @@ class Project(Base):
     branches = relationship("Branch", back_populates="project", cascade="all, delete-orphan")
     commits = relationship("Commit", back_populates="project", cascade="all, delete-orphan")
     locks = relationship("ObjectLock", back_populates="project", cascade="all, delete-orphan")
-    conflicts = relationship("MergeConflict", back_populates="project", cascade="all, delete-orphan")
     project_metadata = relationship("ProjectMetadata", back_populates="project", cascade="all, delete-orphan")
     invitations = relationship("ProjectInvitation", back_populates="project", cascade="all, delete-orphan")
     members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
@@ -157,20 +156,6 @@ class ObjectLock(Base):
     project = relationship("Project", back_populates="locks")
     locked_by_user = relationship("User", back_populates="locks")
 
-
-class MergeConflict(Base):
-    __tablename__ = "merge_conflicts"
-
-    conflict_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), nullable=False)
-    source_commit_id = Column(UUID(as_uuid=True), ForeignKey("commits.commit_id"), nullable=False)
-    target_branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=False)
-    object_name = Column(String, nullable=False)
-    conflict_type = Column(String, nullable=False)  # MODIFY_MODIFY, DELETE_MODIFY, etc.
-    resolved = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=_utcnow)
-
-    project = relationship("Project", back_populates="conflicts")
 
 class ProjectMetadata(Base):
     __tablename__ = "project_metadata"
