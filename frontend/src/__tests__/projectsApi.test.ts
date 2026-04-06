@@ -141,6 +141,8 @@ describe("fetchCommits", () => {
     const result = await fetchCommits("token", "proj-1");
     expect(result).toHaveLength(1);
     expect(result[0].commit_message).toBe("Initial");
+    const url = mockFetch.mock.calls[0][0];
+    expect(url).not.toContain("branch_name=");
   });
 
   it("passes branch name in URL", async () => {

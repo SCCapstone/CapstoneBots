@@ -176,9 +176,17 @@ export async function deleteProject(token: string, id: string): Promise<void> {
 
 export async function fetchCommits(
   token: string,
-  projectId: string
+  projectId: string,
+  branchName?: string
 ): Promise<Commit[]> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/commits`, {
+  const params = new URLSearchParams();
+  if (branchName) {
+    params.set("branch_name", branchName);
+  }
+  const query = params.toString();
+  const url = `${API_BASE}/api/projects/${projectId}/commits${query ? `?${query}` : ""}`;
+
+  const res = await fetch(url, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}` },
   });
