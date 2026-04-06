@@ -571,8 +571,8 @@ async def get_version_history(
         try:
             if storage.object_exists(snapshot_path):
                 snapshot_size = storage.get_object_size(snapshot_path)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to check snapshot for commit %s: %s", commit.commit_hash, e)
         
         history.append(VersionHistoryResponse(
             commit_id=commit.commit_id,

@@ -93,4 +93,4 @@ async def cleanup_project_s3(db: Any, project_id: Any) -> None:
         s3_paths = await collect_project_s3_paths(db, pid)
         delete_s3_objects(s3_paths, project_id)
     except Exception as exc:
-        logger.warning("S3 cleanup failed for project %s: %s", project_id, exc)
+        logger.error("S3 cleanup failed for project %s — orphaned objects may remain: %s", project_id, exc, exc_info=True)
