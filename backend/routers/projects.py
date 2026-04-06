@@ -91,10 +91,10 @@ async def get_projects(
     """
     # Use the helper function to get all projects user has access to
     projects = await get_user_projects(current_user.user_id, db)
-    
+
     # Sort by most recently updated
     projects.sort(key=lambda p: p.updated_at, reverse=True)
-    
+
     return projects
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -135,7 +135,7 @@ async def create_project(
     )
     db.add(new_project)
     await db.flush()  # Flush to get the project_id without committing yet
-    
+
     # Add the owner as a project member with "owner" role
     # This ensures the owner appears in the members list and collaboration system works consistently
     owner_member = ProjectMember(
@@ -145,16 +145,16 @@ async def create_project(
         added_by=current_user.user_id
     )
     db.add(owner_member)
-    
+
     await db.commit()
     await db.refresh(new_project)  # Refresh to get all generated fields
     return new_project
 
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
-    project_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Get detailed information about a specific project (members only)."""
     project, _ = await check_project_access(project_id, current_user.user_id, db)
@@ -162,10 +162,10 @@ async def get_project(
 
 @router.put("/{project_id}", response_model=ProjectResponse)
 async def update_project(
-    project_id: UUID,
-    update_data: ProjectUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        update_data: ProjectUpdate,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Update project details (name, description, or active status). Owner only."""
     project, _ = await check_project_access(project_id, current_user.user_id, db, require_owner=True)
@@ -180,9 +180,9 @@ async def update_project(
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
-    project_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Permanently delete a project and all associated data. Owner only."""
     await check_project_access(project_id, current_user.user_id, db, require_owner=True)
@@ -215,10 +215,10 @@ async def get_commit_history(
 
 @router.post("/{project_id}/commits", response_model=CommitResponse, status_code=status.HTTP_201_CREATED)
 async def create_commit(
-    project_id: UUID,
-    data: CommitCreateRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        data: CommitCreateRequest,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """
     Create a new commit with Blender objects (similar to 'git commit').
@@ -268,7 +268,7 @@ async def create_commit(
             .where(
                 ObjectLock.project_id == project_id,
                 ObjectLock.object_name == obj_name,
-            )
+                )
         )
         lock_result = await db.execute(lock_query)
         lock = lock_result.scalar_one_or_none()
@@ -317,17 +317,17 @@ async def create_commit(
             **obj_data.model_dump()
         )
         db.add(blender_obj)
-    
+
     await db.commit()
     await db.refresh(new_commit)
     return new_commit
 
 @router.get("/{project_id}/commits/{commit_id}/objects", response_model=List[BlenderObjectResponse])
 async def get_commit_objects(
-    project_id: UUID,
-    commit_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        commit_id: UUID,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Get all Blender objects in a specific commit (members only)."""
     await check_project_access(project_id, current_user.user_id, db)
@@ -341,17 +341,17 @@ async def get_commit_objects(
 
 @router.get("/{project_id}/commits/by-hash/{commit_hash}/objects", response_model=List[BlenderObjectResponse])
 async def get_commit_objects_by_hash(
-    project_id: UUID,
-    commit_hash: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        commit_hash: str,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Get all Blender objects in a commit identified by its hash (members only)."""
     await check_project_access(project_id, current_user.user_id, db)
     commit_query = select(Commit).where(
         Commit.project_id == project_id,
         Commit.commit_hash == commit_hash,
-    )
+        )
     commit_result = await db.execute(commit_query)
     commit = commit_result.scalar_one_or_none()
     if not commit:
@@ -369,9 +369,9 @@ async def get_commit_objects_by_hash(
 
 @router.get("/{project_id}/locks", response_model=List[ObjectLockResponse])
 async def get_object_locks(
-    project_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Get all active object locks in a project (members only)."""
     await check_project_access(project_id, current_user.user_id, db)
@@ -385,10 +385,10 @@ async def get_object_locks(
 
 @router.post("/{project_id}/locks", response_model=ObjectLockResponse, status_code=status.HTTP_201_CREATED)
 async def lock_object(
-    project_id: UUID,
-    lock_data: ObjectLockCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        lock_data: ObjectLockCreate,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """
     Lock a Blender object to prevent concurrent edits.
@@ -427,7 +427,7 @@ async def lock_object(
         .where(
             ObjectLock.project_id == project_id,
             ObjectLock.object_name == lock_data.object_name,
-        )
+            )
     )
     result = await db.execute(existing_lock)
     if result.scalar_one_or_none():
@@ -447,10 +447,10 @@ async def lock_object(
 
 @router.delete("/{project_id}/locks/{lock_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def unlock_object(
-    project_id: UUID,
-    lock_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        lock_id: UUID,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Release a lock. Only the lock holder or a project owner can release a lock."""
     lock = await db.get(ObjectLock, lock_id)
@@ -471,10 +471,10 @@ async def unlock_object(
 
 @router.post("/{project_id}/conflicts", response_model=MergeConflictResponse, status_code=status.HTTP_201_CREATED)
 async def create_conflict(
-    project_id: UUID,
-    data: MergeConflictCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        data: MergeConflictCreate,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Record a merge conflict detected by the addon (editors and above)."""
     await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
@@ -493,9 +493,9 @@ async def create_conflict(
 
 @router.get("/{project_id}/conflicts", response_model=List[MergeConflictResponse])
 async def get_unresolved_conflicts(
-    project_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Get all unresolved merge conflicts in a project (members only)."""
     await check_project_access(project_id, current_user.user_id, db)
@@ -504,7 +504,7 @@ async def get_unresolved_conflicts(
         .where(
             MergeConflict.project_id == project_id,
             MergeConflict.resolved == False,
-        )
+            )
         .order_by(MergeConflict.created_at)
     )
     result = await db.execute(query)
@@ -512,10 +512,10 @@ async def get_unresolved_conflicts(
 
 @router.put("/{project_id}/conflicts/{conflict_id}", response_model=MergeConflictResponse)
 async def resolve_conflict(
-    project_id: UUID,
-    conflict_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        conflict_id: UUID,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Mark a merge conflict as resolved (editors and above)."""
     await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
@@ -551,10 +551,10 @@ def _build_invitation_response(inv: ProjectInvitation, project: Project, inviter
 
 @router.post("/{project_id}/invitations", response_model=InvitationResponse, status_code=status.HTTP_201_CREATED)
 async def send_invitation(
-    project_id: UUID,
-    data: InvitationCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        data: InvitationCreate,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """
     Send a project invitation to a user by email or username.
@@ -595,7 +595,7 @@ async def send_invitation(
         select(ProjectMember).where(
             ProjectMember.project_id == project_id,
             ProjectMember.user_id == invitee.user_id,
-        )
+            )
     )
     if existing.scalars().first():
         raise HTTPException(status_code=409, detail="User is already a member of this project.")
@@ -606,7 +606,7 @@ async def send_invitation(
             ProjectInvitation.project_id == project_id,
             ProjectInvitation.invitee_email == invitee_email,
             ProjectInvitation.status == InvitationStatus.pending.value,
-        )
+            )
     )
     if existing_inv.scalars().first():
         raise HTTPException(status_code=409, detail="A pending invitation already exists for this user.")
@@ -630,9 +630,9 @@ async def send_invitation(
 
 @router.get("/{project_id}/invitations", response_model=List[InvitationResponse])
 async def get_project_invitations(
-    project_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Get all invitations for a project (owners and editors)."""
     project, _ = await check_project_access(
@@ -661,10 +661,10 @@ async def get_project_invitations(
 
 @router.delete("/{project_id}/invitations/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def cancel_invitation(
-    project_id: UUID,
-    invitation_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        invitation_id: UUID,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Cancel a pending invitation. Only the inviter or project owner can cancel."""
     project, caller_role = await check_project_access(
@@ -688,10 +688,10 @@ async def cancel_invitation(
 
 @router.post("/{project_id}/members", response_model=ProjectMemberResponse, status_code=status.HTTP_201_CREATED)
 async def add_project_member(
-    project_id: UUID,
-    member_data: ProjectMemberAdd,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        member_data: ProjectMemberAdd,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """
     Add a user to a project by email or username (creates an invitation).
@@ -716,9 +716,9 @@ async def add_project_member(
 
 @router.get("/{project_id}/members", response_model=List[ProjectMemberResponse])
 async def get_project_members(
-    project_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Get all members of a project."""
     project, _ = await check_project_access(project_id, current_user.user_id, db)
@@ -750,11 +750,11 @@ async def get_project_members(
 
 @router.put("/{project_id}/members/{member_id}/role", response_model=ProjectMemberResponse)
 async def update_member_role(
-    project_id: UUID,
-    member_id: UUID,
-    data: MemberRoleUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        member_id: UUID,
+        data: MemberRoleUpdate,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Change a member's role. Only the project owner can change roles."""
     project, _ = await check_project_access(
@@ -789,10 +789,10 @@ async def update_member_role(
 
 @router.delete("/{project_id}/members/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_project_member(
-    project_id: UUID,
-    member_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        project_id: UUID,
+        member_id: UUID,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """Remove a member from a project. Only the project owner can remove members."""
     project, _ = await check_project_access(
@@ -812,4 +812,3 @@ async def remove_project_member(
     await db.delete(member)
     await db.commit()
     return None
-
