@@ -428,6 +428,25 @@ export function computeObjectDiff(
   return entries;
 }
 
+/**
+ * Fetch raw object content (JSON or mesh binary) proxied through the backend.
+ * Avoids S3 CORS issues for in-browser processing (e.g. GLB export).
+ */
+export async function fetchObjectContent(
+  token: string,
+  projectId: string,
+  path: string
+): Promise<Response> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/objects/content?path=${encodeURIComponent(path)}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+  if (!res.ok) await handleProjectError(res, "Fetch object content");
+  return res;
+}
+
 // ============== Merge Conflicts ==============
 
 export async function fetchConflicts(
