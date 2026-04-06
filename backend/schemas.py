@@ -137,6 +137,8 @@ class CommitCreateRequest(BaseModel):
     # author_id: UUID | Removed to be inferred from auth token
     commit_message: str
     objects: List[BlenderObjectCreate]
+    merge_commit: bool = False
+    merge_parent_id: Optional[UUID] = None
 
 # ============== Object Lock Schemas ==============
 class ObjectLockBase(BaseModel):
@@ -154,6 +156,25 @@ class ObjectLockResponse(ObjectLockBase):
     branch_id: UUID
     locked_at: datetime
     expires_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+# ============== Merge Conflict Schemas ==============
+class MergeConflictBase(BaseModel):
+    object_name: str
+    conflict_type: str
+
+class MergeConflictCreate(MergeConflictBase):
+    source_commit_id: UUID
+    target_branch_id: UUID
+
+class MergeConflictResponse(MergeConflictBase):
+    conflict_id: UUID
+    project_id: UUID
+    source_commit_id: UUID
+    target_branch_id: UUID
+    resolved: bool
+    created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
