@@ -72,11 +72,54 @@ async def _resolve_branch(
 
 
 async def _get_default_branch(db: AsyncSession, project_id: UUID) -> Branch:
-    """Get the project's default branch (usually 'main')."""
+    """Get the project's default branch (usually 'main').
+
+    Auto-creates the branch if it doesn't exist yet (handles projects
+    created before branching was added).
+    """
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    return await _resolve_branch(db, project_id, branch_name=project.default_branch)
+
+    branch_name = project.default_branch or "main"
+    result = await db.execute(
+        select(Branch).where(
+            Branch.branch_name == branch_name,
+            Branch.project_id == project_id,
+        )
+    )
+    branch = result.scalar_one_or_none()
+
+    if not branch:
+        # Auto-create for pre-branching projects: point HEAD at latest commit
+        latest_result = await db.execute(
+            select(Commit)
+            .where(Commit.project_id == project_id)
+            .order_by(Commit.committed_at.desc())
+            .limit(1)
+        )
+        latest_commit = latest_result.scalar_one_or_none()
+
+        branch = Branch(
+            project_id=project_id,
+            branch_name=branch_name,
+            head_commit_id=latest_commit.commit_id if latest_commit else None,
+            created_by=project.owner_id,
+        )
+        db.add(branch)
+        await db.flush()
+
+        # Backfill branch_id on existing commits that have none
+        await db.execute(
+            sa_text(
+                "UPDATE commits SET branch_id = :bid "
+                "WHERE project_id = :pid AND branch_id IS NULL"
+            ),
+            {"bid": branch.branch_id, "pid": project_id},
+        )
+        await db.flush()
+
+    return branch
 
 
 async def _find_common_ancestor(
@@ -101,10 +144,16 @@ async def _find_common_ancestor(
 
 def _commit_to_response(commit: Commit) -> CommitResponse:
     """Convert a Commit ORM object to CommitResponse, including branch_name."""
+    branch_name = None
+    try:
+        if commit.branch:
+            branch_name = commit.branch.branch_name
+    except Exception:
+        pass
     return CommitResponse(
         commit_id=commit.commit_id,
         project_id=commit.project_id,
-        branch_id=commit.branch_id,
+        branch_id=getattr(commit, "branch_id", None),
         parent_commit_id=commit.parent_commit_id,
         author_id=commit.author_id,
         commit_hash=commit.commit_hash,
@@ -112,7 +161,7 @@ def _commit_to_response(commit: Commit) -> CommitResponse:
         committed_at=commit.committed_at,
         merge_commit=commit.merge_commit,
         merge_parent_id=commit.merge_parent_id,
-        branch_name=commit.branch.branch_name if commit.branch else None,
+        branch_name=branch_name,
     )
 
 
@@ -597,14 +646,31 @@ async def list_branches(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List all branches for a project (members only)."""
+    """List all branches for a project (members only).
+
+    Auto-creates the default branch if none exist (handles pre-branching projects).
+    """
     await check_project_access(project_id, current_user.user_id, db)
+
     result = await db.execute(
         select(Branch)
         .where(Branch.project_id == project_id)
         .order_by(Branch.created_at)
     )
-    return result.scalars().all()
+    branches = result.scalars().all()
+
+    if not branches:
+        # Auto-create default branch for pre-branching projects
+        await _get_default_branch(db, project_id)
+        await db.commit()
+        result = await db.execute(
+            select(Branch)
+            .where(Branch.project_id == project_id)
+            .order_by(Branch.created_at)
+        )
+        branches = result.scalars().all()
+
+    return branches
 
 
 @router.post("/{project_id}/branches", response_model=BranchResponse, status_code=status.HTTP_201_CREATED)

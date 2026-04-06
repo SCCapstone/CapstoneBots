@@ -108,7 +108,7 @@ class Commit(Base):
 
     commit_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), nullable=False)
-    branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=False)
+    branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=True)
     parent_commit_id = Column(UUID(as_uuid=True), ForeignKey("commits.commit_id"), nullable=True)
     author_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
     commit_message = Column(Text, nullable=False)
@@ -147,7 +147,7 @@ class ObjectLock(Base):
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), nullable=False)
     object_name = Column(String, nullable=False)
     locked_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
-    branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=False)
+    branch_id = Column(UUID(as_uuid=True), ForeignKey("branches.branch_id"), nullable=True)
     locked_at = Column(DateTime, default=_utcnow)
     expires_at = Column(DateTime, nullable=False)
 

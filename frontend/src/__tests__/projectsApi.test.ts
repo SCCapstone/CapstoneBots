@@ -151,7 +151,7 @@ describe("fetchCommits", () => {
       json: async () => [],
     });
 
-    await fetchCommits("token", "proj-1", "develop");
+    await fetchCommits("token", "proj-1", { branchName: "develop" });
     const url = mockFetch.mock.calls[0][0];
     expect(url).toContain("branch_name=develop");
   });
