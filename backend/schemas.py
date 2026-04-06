@@ -67,27 +67,6 @@ class ProjectResponse(ProjectBase):
     owner_id: UUID
     created_at: datetime
     updated_at: datetime
-    default_branch: str
-
-    model_config = ConfigDict(from_attributes=True)
-
-# ============== Branch Schemas ==============
-class BranchBase(BaseModel):
-    branch_name: str
-    parent_branch_id: Optional[UUID] = None
-
-
-class BranchCreate(BaseModel):
-    # What the client provides
-    name: str
-    parent_branch_id: Optional[UUID] = None
-
-class BranchResponse(BranchBase):
-    branch_id: UUID
-    project_id: UUID
-    head_commit_id: Optional[UUID]
-    created_at: datetime
-    created_by: Optional[UUID]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -102,7 +81,6 @@ class CommitCreate(CommitBase):
 class CommitResponse(CommitBase):
     commit_id: UUID
     project_id: UUID
-    branch_id: UUID
     parent_commit_id: Optional[UUID]
     author_id: Optional[UUID]
     commit_hash: str
@@ -133,7 +111,6 @@ class BlenderObjectResponse(BlenderObjectBase):
 
 # Request model for creating a commit (includes objects)
 class CommitCreateRequest(BaseModel):
-    branch_id: UUID
     # author_id: UUID | Removed to be inferred from auth token
     commit_message: str
     objects: List[BlenderObjectCreate]
@@ -146,14 +123,12 @@ class ObjectLockBase(BaseModel):
 
 class ObjectLockCreate(ObjectLockBase):
     expires_at: datetime
-    branch_id: UUID
     # locked_by: UUID | Removed to be inferred from auth token
 
 class ObjectLockResponse(ObjectLockBase):
     lock_id: UUID
     project_id: UUID
     locked_by: UUID
-    branch_id: UUID
     locked_at: datetime
     expires_at: datetime
 
@@ -172,7 +147,7 @@ class MergeConflictResponse(MergeConflictBase):
     conflict_id: UUID
     project_id: UUID
     source_commit_id: UUID
-    target_branch_id: UUID
+    target_commit_id: UUID
     resolved: bool
     created_at: datetime
 
@@ -230,7 +205,6 @@ class ObjectDownloadResponse(BaseModel):
 
 class CommitDataRequest(BaseModel):
     """Enhanced commit request with optional mesh data"""
-    branch_id: UUID
     author_id: UUID
     commit_message: str
     objects: List[BlenderObjectCreate]

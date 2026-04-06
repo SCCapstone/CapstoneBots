@@ -42,18 +42,17 @@ class TestStorageUtils:
     def test_compute_commit_hash(self):
         """Test commit hash generation"""
         project_id = str(uuid4())
-        branch_id = str(uuid4())
         author_id = str(uuid4())
         message = "Test commit"
         timestamp = "2025-12-04T10:30:00"
         
         hash1 = StorageUtils.compute_commit_hash(
-            project_id, branch_id, author_id, message, timestamp
+            project_id, author_id, message, timestamp
         )
         
         # Different inputs should produce different hash
         hash2 = StorageUtils.compute_commit_hash(
-            project_id, branch_id, author_id, "Different message", timestamp
+            project_id, author_id, "Different message", timestamp
         )
         
         assert hash1 != hash2

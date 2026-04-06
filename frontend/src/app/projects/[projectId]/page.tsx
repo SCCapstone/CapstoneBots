@@ -37,7 +37,7 @@ async function loadCommitsWithUsers(
   token: string,
   projectId: string
 ): Promise<Commit[]> {
-  const rawCommits = await fetchCommits(token, projectId, "main");
+  const rawCommits = await fetchCommits(token, projectId);
   const me = await fetchCurrentUser(token);
   return rawCommits.map((c) => ({
     ...c,
@@ -352,13 +352,13 @@ export default function ProjectPage() {
             </div>
           </div>
 
-          {/* Branch / last commit bar */}
+          {/* Last commit bar */}
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-xs">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-3">
                 <button className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200 hover:border-slate-500">
                   <span className="h-2 w-2 rounded-full bg-green-500" />
-                  <span>main</span>
+                  <span>history</span>
                 </button>
                 {commits.length > 0 ? (
                   <p className="text-slate-400">
