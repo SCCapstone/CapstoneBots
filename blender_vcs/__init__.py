@@ -707,7 +707,7 @@ def _enum_conflict_items(self, context):
     return items
 
 
-PROJECT_BLEND_FILE_ITEMS = [("NONE", "No pushed .blend files", "Push a file to this project first")]
+PROJECT_BLEND_FILE_ITEMS = [("NONE", "No commits found", "Push objects to this project first")]
 PROJECT_BLEND_FILE_MAP = {}
 PROJECT_BLEND_FILE_PROJECT_ID = ""
 
@@ -750,10 +750,15 @@ def _cleanup_bvcs_temp_dirs(max_age_secs=_BVCS_TEMP_MAX_AGE_SECS, force=False):
 
 
 def _refresh_project_blend_file_cache(context, prefs):
+    """Refresh the commit history dropdown for the 'Load Commit' feature.
+
+    Lists recent commits on the active branch so users can checkout any
+    previous commit at the object level.
+    """
     global PROJECT_BLEND_FILE_ITEMS, PROJECT_BLEND_FILE_MAP, PROJECT_BLEND_FILE_PROJECT_ID
 
     PROJECT_BLEND_FILE_MAP = {}
-    PROJECT_BLEND_FILE_ITEMS = [("NONE", "No pushed .blend files", "Push a file to this project first")]
+    PROJECT_BLEND_FILE_ITEMS = [("NONE", "No commits found", "Push objects to this project first")]
     PROJECT_BLEND_FILE_PROJECT_ID = str(getattr(prefs, "project_id", "") or "")
 
     if not getattr(prefs, "project_id", None) or not getattr(prefs, "auth_token", None):
@@ -775,78 +780,29 @@ def _refresh_project_blend_file_cache(context, prefs):
         if not isinstance(commits, list) or not commits:
             return
 
-        # Limit to 10 most recent commits to avoid excessive HTTP requests.
-        recent_commits = [c for c in commits[:10] if c.get("commit_id")]
-
-        def _fetch_commit_objects(commit):
-            """Fetch objects for a single commit (runs in a thread)."""
-            commit_id = commit.get("commit_id")
-            resp = requests.get(
-                f"{api_base}/api/projects/{project_id}/commits/{commit_id}/objects",
-                headers=headers,
-                timeout=10,
-            )
-            resp.raise_for_status()
-            return commit, resp.json()
-
-        # Fetch commit objects concurrently (up to 4 at a time).
-        commit_results = []
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = {
-                executor.submit(_fetch_commit_objects, c): c
-                for c in recent_commits
-            }
-            for future in as_completed(futures):
-                try:
-                    commit_results.append(future.result())
-                except Exception:
-                    logger.debug(f"Skipping commit {futures[future].get('commit_id')}: request failed")
-
-        # Sort results to preserve original commit order (most recent first).
-        commit_order = {c.get("commit_id"): i for i, c in enumerate(recent_commits)}
-        commit_results.sort(key=lambda pair: commit_order.get(pair[0].get("commit_id"), 0))
-
-        seen_paths = set()
-        found_files = []
-
-        for commit, commit_objects in commit_results:
-            if not isinstance(commit_objects, list):
-                continue
-
-            for obj in commit_objects:
-                if not isinstance(obj, dict):
-                    continue
-                if obj.get("object_type") != "BLEND_FILE":
-                    continue
-                s3_path = obj.get("json_data_path")
-                if not isinstance(s3_path, str) or not s3_path.startswith("s3://"):
-                    continue
-                if s3_path in seen_paths:
-                    continue
-
-                seen_paths.add(s3_path)
-                found_files.append({
-                    "s3_path": s3_path,
-                    "object_name": obj.get("object_name") or os.path.basename(s3_path),
-                    "commit_id": commit.get("commit_id"),
-                    "commit_hash": commit.get("commit_hash"),
-                    "commit_message": commit.get("commit_message"),
-                })
-
-        if not found_files:
+        # Limit to 20 most recent commits
+        recent_commits = [c for c in commits[:20] if c.get("commit_id")]
+        if not recent_commits:
             return
 
-        PROJECT_BLEND_FILE_ITEMS = [("NONE", "Select a project file...", "Choose a pushed .blend file to open")]
+        PROJECT_BLEND_FILE_ITEMS = [("NONE", "Select a commit to load...", "Choose a commit to reconstruct the scene from")]
         PROJECT_BLEND_FILE_MAP = {}
-        for idx, file_info in enumerate(found_files):
-            enum_id = f"FILE_{idx}"
-            short_hash = str(file_info.get("commit_hash", ""))[:8]
-            label = f"{file_info['object_name']} [{short_hash}]"
-            desc = file_info.get("s3_path", "")
+        for idx, commit in enumerate(recent_commits):
+            enum_id = f"COMMIT_{idx}"
+            short_hash = str(commit.get("commit_hash", ""))[:8]
+            msg = str(commit.get("commit_message", ""))[:40]
+            branch_name = str(commit.get("branch_name", ""))
+            label = f"[{short_hash}] {msg}"
+            desc = f"Commit {short_hash} on {branch_name}" if branch_name else f"Commit {short_hash}"
             PROJECT_BLEND_FILE_ITEMS.append((enum_id, label, desc))
-            PROJECT_BLEND_FILE_MAP[enum_id] = file_info
+            PROJECT_BLEND_FILE_MAP[enum_id] = {
+                "commit_id": commit.get("commit_id"),
+                "commit_hash": commit.get("commit_hash"),
+                "commit_message": commit.get("commit_message"),
+                "branch_name": branch_name,
+            }
     except Exception as e:
-        logger.error(f"Failed to load project file list: {e}")
+        logger.error(f"Failed to load commit list: {e}")
 
 
 def _enum_project_blend_files(self, context):
@@ -2245,11 +2201,14 @@ class BVCS_OT_PullProject(bpy.types.Operator):
         return {'FINISHED'}
 
 class BVCS_OT_LoadProjectFile(bpy.types.Operator):
+    """Load a specific commit's objects into the scene (object-level checkout)."""
     bl_idname = "bvcs.load_project_file"
-    bl_label = "Load Selected File"
+    bl_label = "Load Commit"
 
     def execute(self, context):
         prefs = get_prefs(context)
+        wm = context.window_manager
+
         if not prefs.project_id:
             self.report({'ERROR'}, "No project selected")
             return {'CANCELLED'}
@@ -2257,17 +2216,121 @@ class BVCS_OT_LoadProjectFile(bpy.types.Operator):
             self.report({'ERROR'}, "Not logged in")
             return {'CANCELLED'}
 
-        selected = context.window_manager.bvcs_project_file
+        selected = wm.bvcs_project_file
         if not selected or selected == "NONE":
-            self.report({'ERROR'}, "Select a project file first")
+            self.report({'ERROR'}, "Select a commit first")
             return {'CANCELLED'}
 
+        commit_info = PROJECT_BLEND_FILE_MAP.get(selected)
+        if not commit_info:
+            self.report({'ERROR'}, "Selected commit is no longer available")
+            return {'CANCELLED'}
+
+        commit_id = commit_info.get("commit_id")
+        commit_hash = commit_info.get("commit_hash", "")
+        if not commit_id:
+            self.report({'ERROR'}, "Invalid commit data")
+            return {'CANCELLED'}
+
+        headers = get_auth_headers(prefs)
+        api_base = get_api_base(prefs)
+        project_id = prefs.project_id
+
         try:
-            _open_selected_project_file(context, prefs, selected)
-            self.report({'INFO'}, "Loaded selected file")
+            # Fetch objects for the selected commit
+            objects_resp = requests.get(
+                f"{api_base}/api/projects/{project_id}/commits/{commit_id}/objects",
+                headers=headers,
+                timeout=10,
+            )
+            objects_resp.raise_for_status()
+            commit_objects = objects_resp.json()
+
+            if not isinstance(commit_objects, list) or not commit_objects:
+                self.report({'ERROR'}, "No objects in this commit")
+                return {'CANCELLED'}
+
+            pull_data = prepare_pull_data(commit_objects)
+
+            # Check for legacy BLEND_FILE commits
+            legacy_blend = next((obj for obj in pull_data if obj["is_legacy_blend"]), None)
+            if legacy_blend:
+                # Fallback: old-style BLEND_FILE commit — download .blend directly
+                logger.info("Legacy BLEND_FILE commit detected, falling back to .blend download")
+                file_info = {
+                    "s3_path": legacy_blend["json_data_path"],
+                    "object_name": legacy_blend["object_name"],
+                    "commit_id": commit_id,
+                    "commit_hash": commit_hash,
+                    "commit_message": commit_info.get("commit_message", ""),
+                }
+                _open_project_file_info(context, prefs, file_info)
+                return {'FINISHED'}
+
+            # Object-level checkout: download and reconstruct scene
+            self.report({'INFO'}, f"Loading {len(pull_data)} objects from commit {commit_hash[:8]}...")
+
+            objects_data = []
+            mesh_binaries = {}
+
+            for obj_info in pull_data:
+                name = obj_info["object_name"]
+                json_path = obj_info["json_data_path"]
+
+                try:
+                    url_resp = requests.get(
+                        f"{api_base}/api/projects/{project_id}/objects/download-url",
+                        params={"path": json_path},
+                        headers=headers,
+                        timeout=10,
+                    )
+                    url_resp.raise_for_status()
+                    presigned_url = url_resp.json().get("url")
+                    if presigned_url:
+                        data_resp = requests.get(presigned_url, timeout=30)
+                        data_resp.raise_for_status()
+                        metadata = data_resp.json()
+                        objects_data.append(metadata)
+
+                    # Download mesh binary if available
+                    mesh_path = obj_info.get("mesh_data_path")
+                    if mesh_path:
+                        mesh_url_resp = requests.get(
+                            f"{api_base}/api/projects/{project_id}/objects/download-url",
+                            params={"path": mesh_path},
+                            headers=headers,
+                            timeout=10,
+                        )
+                        mesh_url_resp.raise_for_status()
+                        mesh_presigned = mesh_url_resp.json().get("url")
+                        if mesh_presigned:
+                            mesh_resp = requests.get(mesh_presigned, timeout=30)
+                            mesh_resp.raise_for_status()
+                            mesh_binaries[name] = mesh_resp.content
+                except Exception as e:
+                    logger.warning(f"Failed to download object '{name}': {e}")
+
+            if not objects_data:
+                self.report({'ERROR'}, "Failed to download any objects")
+                return {'CANCELLED'}
+
+            # Clear scene and reconstruct
+            reconstruct_scene(objects_data, mesh_binaries, clear_existing=True)
+
+            # Update sync state
+            wm["bvcs_last_synced_commit_hash"] = commit_hash
+            wm["bvcs_last_pulled"] = {
+                "commit_id": commit_id,
+                "commit_hash": commit_hash,
+                "commit_message": commit_info.get("commit_message", ""),
+                "pulled_at": datetime.now(timezone.utc).isoformat(),
+                "object_count": len(objects_data),
+            }
+
+            self.report({'INFO'}, f"Loaded {len(objects_data)} objects from commit {commit_hash[:8]}")
             return {'FINISHED'}
         except Exception as e:
-            logger.error(f"Failed to load selected project file: {e}")
+            logger.error(f"Failed to load commit: {e}")
             self.report({'ERROR'}, f"Load failed: {e}")
             return {'CANCELLED'}
 
@@ -3126,8 +3189,8 @@ class BVCS_PT_Panel(bpy.types.Panel):
             layout.operator("bvcs.pull_project")
 
             row = layout.row(align=True)
-            row.prop(context.window_manager, "bvcs_project_file", text="Project Files")
-            row.operator("bvcs.load_project_file", text="Load File")
+            row.prop(context.window_manager, "bvcs_project_file", text="Commits")
+            row.operator("bvcs.load_project_file", text="Load")
 
             layout.operator("bvcs.check_conflicts")
 
@@ -3246,8 +3309,8 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.WindowManager.bvcs_project_file = bpy.props.EnumProperty(
-        name="Project Files",
-        description="Select a pushed .blend file",
+        name="Commits",
+        description="Select a commit to load into the scene",
         items=_enum_project_blend_files,
     )
     bpy.types.WindowManager.bvcs_conflict_items = bpy.props.CollectionProperty(
