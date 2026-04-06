@@ -1271,8 +1271,9 @@ class BVCS_OT_LoadProjectFile(bpy.types.Operator):
             self.report({'ERROR'}, f"Load failed: {e}")
             return {'CANCELLED'}
 
-class BVCS_OT_ResolveMergeConflict(bpy.types.Operator):
-    bl_idname = "bvcs.resolve_merge_conflict"
+# DEPRECATED: Redundant after removing MergeConflict from database
+# class BVCS_OT_ResolveMergeConflict(bpy.types.Operator):
+#     bl_idname = "bvcs.resolve_merge_conflict"
     bl_label = "Resolve Merge Conflict"
 
     resolution: bpy.props.EnumProperty(
@@ -1677,7 +1678,7 @@ class BVCS_PT_Panel(bpy.types.Panel):
             row = layout.row(align=True)
             row.prop(context.window_manager, "bvcs_project_file", text="Project Files")
             row.operator("bvcs.load_project_file", text="Load File")
-            layout.operator("bvcs.check_conflicts")
+            # layout.operator("bvcs.check_conflicts")  # Redundant after removing MergeConflict from database
             layout.separator()
             layout.label(text="S3 Config:")
             layout.prop(prefs, "s3_bucket", text="Bucket")
@@ -1697,7 +1698,7 @@ class BVCS_PT_Panel(bpy.types.Panel):
                 layout.label(text="Push Conflict Detected", icon='ERROR')
                 layout.label(text=f"  Remote: {str(conflict.get('remote_commit_hash', ''))[:8]}...")
                 layout.label(text=f"  Base: {str(conflict.get('base_commit_hash', ''))[:8]}...")
-                layout.operator("bvcs.resolve_merge_conflict", text="Resolve Merge Conflict")
+                # layout.operator("bvcs.resolve_merge_conflict", text="Resolve Merge Conflict")  # Redundant after removing MergeConflict from database
 
             # Show last push info if available
             if "bvcs_last_pushed" in wm:
@@ -1728,8 +1729,8 @@ classes = [
     BVCS_OT_Push,
     BVCS_OT_PullProject,
     BVCS_OT_LoadProjectFile,
-    BVCS_OT_ResolveMergeConflict,
-    BVCS_OT_CheckConflicts,
+    # BVCS_OT_ResolveMergeConflict,  # Redundant after removing MergeConflict from database
+    # BVCS_OT_CheckConflicts,  # Redundant after removing MergeConflict from database
     BVCS_PT_Panel
 ]
 

@@ -55,31 +55,14 @@ async def upload_blender_object(
 ):
     """
     Upload a Blender object with optional mesh data to storage.
-    
+
     This endpoint handles file uploads for Blender objects, storing both
     metadata (JSON) and optional binary mesh data to MinIO. Files are
-    organized by project → object → commit hash.
-    
-    Args:
-        project_id: Target project UUID
-        object_id: Object UUID
-        commit_hash: Associated commit hash
-        object_name: Human-readable object name
-        object_type: Blender object type (MESH, CAMERA, LIGHT, etc.)
-        json_file: Object metadata as JSON file
-        mesh_file: Optional binary mesh data
-        db: Database session
-        storage: Storage service
-        current_user: Authenticated user
-        
-    Returns:
-        dict: Storage paths and metadata for uploaded files
-        
-    Example:
-        POST /api/projects/{project_id}/objects/upload?object_id=...&commit_hash=...
-        Files:
-        - json_file: metadata.json
-        - mesh_file: mesh.bin (optional)
+    organized by project → object → commit hash. Requires the commit
+    to already exist in the database.
+
+    For uploading objects *before* creating a commit (object-level VCS flow),
+    use the ``stage-upload`` endpoint instead.
     """
     # Editors and above can upload objects
     await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
@@ -148,6 +131,180 @@ async def upload_blender_object(
         "json_size": len(json_content),
         "mesh_size": len(mesh_content) if mesh_content is not None else None,
     }
+
+
+@router.post("/{project_id}/objects/stage-upload", status_code=status.HTTP_201_CREATED)
+async def stage_upload_blender_object(
+    project_id: UUID,
+    object_name: str,
+    object_type: str,
+    blob_hash: str,
+    json_file: UploadFile = File(...),
+    mesh_file: UploadFile = None,
+    db: AsyncSession = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Upload a Blender object to S3 storage *before* creating a commit.
+
+    This is used by the object-level VCS flow where the addon:
+    1. Serializes each changed object
+    2. Uploads JSON metadata + optional mesh binary to S3 via this endpoint
+    3. Creates the commit via POST /commits with the returned S3 paths
+
+    Unlike ``/objects/upload``, this endpoint does NOT require a commit to
+    exist and does NOT insert a BlenderObject DB row. The commit creation
+    endpoint handles DB record creation.
+
+    The blob_hash is used as the S3 path component (instead of commit_hash)
+    so that identical content maps to the same path for deduplication.
+
+    Args:
+        project_id: Target project UUID
+        object_name: Human-readable object name (e.g. "Cube")
+        object_type: Blender object type (MESH, CAMERA, LIGHT, etc.)
+        blob_hash: SHA-256 hash of the object metadata (used for dedup and S3 path)
+        json_file: Object metadata as JSON file
+        mesh_file: Optional binary mesh data
+
+    Returns:
+        dict with json_path, mesh_path, blob_hash, sizes
+    """
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+
+    # Validate object_name
+    if not object_name or not object_name.strip():
+        raise HTTPException(status_code=400, detail="object_name is required")
+
+    # Validate blob_hash
+    if not blob_hash or len(blob_hash) != 64:
+        raise HTTPException(status_code=400, detail="blob_hash must be a 64-character hex string")
+
+    # Read JSON content
+    json_content = await json_file.read()
+    try:
+        json_data = json.loads(json_content)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON in json_file")
+
+    # Use blob_hash as the "commit hash" path component for S3 organization.
+    # This means identical content always goes to the same path → natural dedup.
+    from uuid import uuid4
+    object_id = uuid4()
+
+    json_path = storage.upload_object_json(project_id, object_id, blob_hash, json_data)
+
+    mesh_path = None
+    mesh_size = None
+    if mesh_file:
+        mesh_content = await mesh_file.read()
+        mesh_path = storage.upload_object_mesh(project_id, object_id, blob_hash, mesh_content)
+        mesh_size = len(mesh_content)
+
+    return {
+        "object_name": object_name,
+        "object_type": object_type,
+        "json_path": json_path,
+        "mesh_path": mesh_path,
+        "blob_hash": blob_hash,
+        "json_size": len(json_content),
+        "mesh_size": mesh_size,
+    }
+
+
+@router.get("/{project_id}/objects/download-url")
+async def get_object_download_url(
+    project_id: UUID,
+    path: str,
+    db: AsyncSession = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get a presigned download URL for an object's JSON metadata or mesh binary.
+
+    This is a simplified version of the ``/files/download`` endpoint,
+    specifically for object-level VCS. It validates that the requested path
+    belongs to the project and returns a presigned URL.
+
+    Args:
+        project_id: Project UUID
+        path: S3 object path (e.g. "projects/{project_id}/objects/{object_id}/hash.json")
+
+    Returns:
+        dict with "url" key containing the presigned download URL
+    """
+    await check_project_access(project_id, current_user.user_id, db)
+
+    if not path or not path.strip():
+        raise HTTPException(status_code=400, detail="path is required")
+
+    normalized = path.strip()
+
+    # Security: ensure path belongs to this project
+    expected_prefix = f"projects/{project_id}/"
+    if not normalized.startswith(expected_prefix):
+        raise HTTPException(status_code=403, detail="Path does not belong to this project")
+
+    try:
+        url = storage.get_presigned_url(normalized)
+        return {"url": url}
+    except S3Error as e:
+        if e.code == "NoSuchKey":
+            raise HTTPException(status_code=404, detail="Object not found in storage")
+        logger.error(f"S3 error generating presigned URL: {e}")
+        raise HTTPException(status_code=500, detail="Error generating download URL")
+    except Exception as e:
+        logger.error(f"Error generating presigned URL: {e}")
+        raise HTTPException(status_code=500, detail="Error generating download URL")
+
+
+@router.get("/{project_id}/objects/content")
+async def get_object_content(
+    project_id: UUID,
+    path: str,
+    db: AsyncSession = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Proxy-download raw file content from S3 by path.
+
+    Unlike ``download-url`` (which returns a presigned URL), this streams the
+    actual bytes through the backend so the browser never hits S3 directly —
+    avoiding CORS issues for in-browser processing like GLB export.
+    """
+    await check_project_access(project_id, current_user.user_id, db)
+
+    if not path or not path.strip():
+        raise HTTPException(status_code=400, detail="path is required")
+
+    normalized = path.strip()
+    expected_prefix = f"projects/{project_id}/"
+    if not normalized.startswith(expected_prefix):
+        raise HTTPException(status_code=403, detail="Path does not belong to this project")
+
+    try:
+        if normalized.endswith(".json"):
+            json_data = storage.download_object_json(normalized)
+            data = json.dumps(json_data).encode("utf-8")
+            media_type = "application/json"
+        else:
+            data = storage.download_object_mesh(normalized)
+            media_type = "application/octet-stream"
+        return StreamingResponse(
+            iter([data]),
+            media_type=media_type,
+        )
+    except S3Error as e:
+        if e.code == "NoSuchKey":
+            raise HTTPException(status_code=404, detail="Object not found in storage")
+        logger.error(f"S3 error downloading content: {e}")
+        raise HTTPException(status_code=500, detail="Error downloading content")
+    except Exception as e:
+        logger.error(f"Error downloading content: {e}")
+        raise HTTPException(status_code=500, detail="Error downloading content")
 
 
 # ============== Object Download Routes ==============

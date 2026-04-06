@@ -32,7 +32,7 @@ from schemas import (
     CommitCreate, CommitResponse, CommitCreateRequest,
     BlenderObjectCreate, BlenderObjectResponse,
     ObjectLockCreate, ObjectLockResponse,
-    MergeConflictResponse,
+    MergeConflictCreate, MergeConflictResponse,
     ProjectMemberAdd, ProjectMemberResponse, ProjectMemberRemove, ProjectWithMembersResponse,
     InvitationCreate, InvitationResponse, MemberRoleUpdate,
 )
@@ -303,6 +303,8 @@ async def create_commit(
         commit_message=data.commit_message,
         commit_hash=commit_hash,
         committed_at=now,
+        merge_commit=data.merge_commit,
+        merge_parent_id=data.merge_parent_id,
     )
     db.add(new_commit)
     await db.flush()
@@ -335,6 +337,32 @@ async def get_commit_objects(
     )
     result = await db.execute(query)
     return result.scalars().all()
+
+@router.get("/{project_id}/commits/by-hash/{commit_hash}/objects", response_model=List[BlenderObjectResponse])
+async def get_commit_objects_by_hash(
+    project_id: UUID,
+    commit_hash: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get all Blender objects in a commit identified by its hash (members only)."""
+    await check_project_access(project_id, current_user.user_id, db)
+    commit_query = select(Commit).where(
+        Commit.project_id == project_id,
+        Commit.commit_hash == commit_hash,
+    )
+    commit_result = await db.execute(commit_query)
+    commit = commit_result.scalar_one_or_none()
+    if not commit:
+        raise HTTPException(status_code=404, detail="Commit not found")
+    query = (
+        select(BlenderObject)
+        .where(BlenderObject.commit_id == commit.commit_id)
+        .order_by(BlenderObject.object_name)
+    )
+    result = await db.execute(query)
+    return result.scalars().all()
+
 
 # ============== Object Lock Routes ==============
 
@@ -439,6 +467,28 @@ async def unlock_object(
     await db.commit()
 
 # ============== Merge Conflict Routes ==============
+
+@router.post("/{project_id}/conflicts", response_model=MergeConflictResponse, status_code=status.HTTP_201_CREATED)
+async def create_conflict(
+    project_id: UUID,
+    data: MergeConflictCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Record a merge conflict detected by the addon (editors and above)."""
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+    conflict = MergeConflict(
+        project_id=project_id,
+        source_commit_id=data.source_commit_id,
+        target_branch_id=data.target_branch_id,
+        object_name=data.object_name,
+        conflict_type=data.conflict_type,
+    )
+    db.add(conflict)
+    await db.commit()
+    await db.refresh(conflict)
+    return conflict
+
 
 @router.get("/{project_id}/conflicts", response_model=List[MergeConflictResponse])
 async def get_unresolved_conflicts(
