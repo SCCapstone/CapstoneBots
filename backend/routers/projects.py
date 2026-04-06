@@ -21,9 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, text as sa_text
 from sqlalchemy.orm import joinedload
 
+
+# removed from models import MergeConflict,
 from database import get_db
 from models import (
-    Project, Commit, BlenderObject, ObjectLock, MergeConflict,
+    Project, Commit, BlenderObject, ObjectLock,
     User, ProjectMember, ProjectInvitation,
     MemberRole, InvitationStatus, INVITE_EXPIRY_DAYS, role_at_least,
 )
