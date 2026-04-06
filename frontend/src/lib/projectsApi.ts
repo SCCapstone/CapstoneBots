@@ -12,6 +12,7 @@ export type Project = {
 export type Commit = {
   commit_id: string;
   project_id: string;
+  branch_id?: string | null;
   parent_commit_id: string | null;
   author_id: string;
   commit_hash: string;
@@ -20,6 +21,27 @@ export type Commit = {
   merge_commit?: boolean;
   merge_parent_id?: string | null;
   author_username?: string;
+  branch_name?: string | null;
+};
+
+export type Branch = {
+  branch_id: string;
+  project_id: string;
+  branch_name: string;
+  head_commit_id: string | null;
+  parent_branch_id: string | null;
+  created_at: string;
+  created_by: string | null;
+};
+
+export type BranchCreatePayload = {
+  branch_name: string;
+  source_commit_id?: string;
+};
+
+export type MergeRequestPayload = {
+  source_branch_id: string;
+  commit_message?: string;
 };
 
 export type ProjectCreatePayload = {
@@ -176,9 +198,15 @@ export async function deleteProject(token: string, id: string): Promise<void> {
 
 export async function fetchCommits(
   token: string,
-  projectId: string
+  projectId: string,
+  options?: { branchName?: string; branchId?: string }
 ): Promise<Commit[]> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/commits`, {
+  const params = new URLSearchParams();
+  if (options?.branchName) params.set("branch_name", options.branchName);
+  if (options?.branchId) params.set("branch_id", options.branchId);
+  const qs = params.toString();
+  const url = `${API_BASE}/api/projects/${projectId}/commits${qs ? `?${qs}` : ""}`;
+  const res = await fetch(url, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -441,34 +469,73 @@ export async function fetchObjectContent(
   return res;
 }
 
-// ============== Merge Conflicts ==============
+// ============== Branches ==============
 
-export async function fetchConflicts(
+export async function fetchBranches(
   token: string,
   projectId: string
-): Promise<MergeConflict[]> {
+): Promise<Branch[]> {
   const res = await fetch(
-    `${API_BASE}/api/projects/${projectId}/conflicts`,
-    {
-      headers: { Authorization: `Bearer ${token}` },
-    }
+    `${API_BASE}/api/projects/${projectId}/branches`,
+    { headers: { Authorization: `Bearer ${token}` } }
   );
-  if (!res.ok) await handleProjectError(res, "Fetch conflicts");
+  if (!res.ok) await handleProjectError(res, "Fetch branches");
   return res.json();
 }
 
-export async function resolveConflict(
+export async function createBranch(
   token: string,
   projectId: string,
-  conflictId: string
-): Promise<MergeConflict> {
+  payload: BranchCreatePayload
+): Promise<Branch> {
   const res = await fetch(
-    `${API_BASE}/api/projects/${projectId}/conflicts/${conflictId}`,
+    `${API_BASE}/api/projects/${projectId}/branches`,
     {
-      method: "PUT",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+  if (!res.ok) await handleProjectError(res, "Create branch");
+  return res.json();
+}
+
+export async function deleteBranch(
+  token: string,
+  projectId: string,
+  branchId: string
+): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/branches/${branchId}`,
+    {
+      method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
     }
   );
-  if (!res.ok) await handleProjectError(res, "Resolve conflict");
+  if (res.status === 204) return;
+  if (!res.ok) await handleProjectError(res, "Delete branch");
+}
+
+export async function mergeBranch(
+  token: string,
+  projectId: string,
+  targetBranchId: string,
+  payload: MergeRequestPayload
+): Promise<Commit> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/branches/${targetBranchId}/merge`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+  if (!res.ok) await handleProjectError(res, "Merge branch");
   return res.json();
 }

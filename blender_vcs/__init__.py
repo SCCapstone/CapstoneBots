@@ -207,6 +207,52 @@ def get_bvcs_login_state():
         wm["bvcs_logged_in"] = bool(prefs and getattr(prefs, "auth_token", None))
     return wm
 
+
+def _get_active_branch_name(wm):
+    """Return the currently active branch name (default 'main')."""
+    return str(wm.get("bvcs_active_branch_name") or "main")
+
+
+def _get_active_branch_id(wm):
+    """Return the currently active branch ID (empty string if not set)."""
+    return str(wm.get("bvcs_active_branch_id") or "")
+
+
+def _set_active_branch(wm, branch_id, branch_name):
+    """Set the active branch in window manager state."""
+    wm["bvcs_active_branch_id"] = str(branch_id)
+    wm["bvcs_active_branch_name"] = str(branch_name)
+
+
+def _fetch_branches_list(prefs):
+    """Fetch branches for the current project. Returns list of dicts."""
+    headers = get_auth_headers(prefs)
+    api_base = get_api_base(prefs)
+    project_id = prefs.project_id
+    if not project_id:
+        return []
+    try:
+        resp = requests.get(
+            f"{api_base}/api/projects/{project_id}/branches",
+            headers=headers, timeout=10,
+        )
+        resp.raise_for_status()
+        branches = resp.json()
+        return branches if isinstance(branches, list) else []
+    except Exception as e:
+        logger.error(f"Failed to fetch branches: {e}")
+        return []
+
+
+def _ensure_active_branch(wm, prefs):
+    """Ensure we have a valid active branch set. Defaults to 'main'."""
+    if _get_active_branch_id(wm):
+        return
+    branches = _fetch_branches_list(prefs)
+    if branches:
+        main = next((b for b in branches if b.get("branch_name") == "main"), branches[0])
+        _set_active_branch(wm, main["branch_id"], main["branch_name"])
+
 def normalize_user_dict(user: dict) -> dict:
     if not isinstance(user, dict):
         return user
@@ -536,6 +582,10 @@ class BVCS_OT_SelectProject(bpy.types.Operator):
             del context.window_manager["bvcs_push_conflict"]
         if "bvcs_push_conflict_compare" in context.window_manager:
             del context.window_manager["bvcs_push_conflict_compare"]
+        # Initialize active branch to "main" for the new project
+        context.window_manager["bvcs_active_branch_id"] = ""
+        context.window_manager["bvcs_active_branch_name"] = "main"
+        _ensure_active_branch(context.window_manager, prefs)
         self.report({'INFO'}, f"Selected project {self.project_enum}")
         logger.info(f"Project selected: {self.project_enum}")
         return {'FINISHED'}
@@ -670,7 +720,7 @@ def _refresh_project_blend_file_cache(context, prefs):
     try:
         commits_resp = requests.get(
             f"{api_base}/api/projects/{project_id}/commits",
-            params={"branch_name": "main"},
+            params={"branch_name": _get_active_branch_name(bpy.context.window_manager)},
             headers=headers,
             timeout=10,
         )
@@ -786,7 +836,7 @@ def _get_latest_remote_blend_file_info(prefs):
 
     commits_resp = requests.get(
         f"{api_base}/api/projects/{project_id}/commits",
-        params={"branch_name": "main"},
+        params={"branch_name": _get_active_branch_name(bpy.context.window_manager)},
         headers=headers,
         timeout=10,
     )
@@ -839,9 +889,9 @@ def _get_latest_remote_blend_file_info(prefs):
 # ---------- remote chronology helpers ----------
 
 def _get_latest_remote_commit_hash(prefs):
-    """Return the hash string of the tip of main branch on the remote (or "").
+    """Return the hash string of the tip of the active branch on the remote (or "").
 
-    Directly queries the commits API for the latest commit on the main branch.
+    Directly queries the commits API for the latest commit on the active branch.
     """
     try:
         headers = get_auth_headers(prefs)
@@ -852,7 +902,7 @@ def _get_latest_remote_commit_hash(prefs):
 
         resp = requests.get(
             f"{api_base}/api/projects/{project_id}/commits",
-            params={"branch_name": "main"},
+            params={"branch_name": _get_active_branch_name(bpy.context.window_manager)},
             headers=headers,
             timeout=10,
         )
@@ -995,7 +1045,7 @@ def _get_parent_commit_objects(prefs) -> dict:
     try:
         commits_resp = requests.get(
             f"{api_base}/api/projects/{project_id}/commits",
-            params={"branch_name": "main"},
+            params={"branch_name": _get_active_branch_name(bpy.context.window_manager)},
             headers=headers,
             timeout=10,
         )
@@ -1336,6 +1386,194 @@ class BVCS_OT_RefreshS3(bpy.types.Operator):
         self.report({'INFO'}, "S3 credentials refreshed")
         return {'FINISHED'}
 
+# ---------------- Branch Operators ----------------
+
+# Cache for branch enum items
+_BRANCH_ENUM_ITEMS = [("main", "main", "Default branch")]
+_BRANCH_ENUM_PROJECT_ID = ""
+
+
+def _refresh_branch_enum(context):
+    """Refresh the cached branch enum items."""
+    global _BRANCH_ENUM_ITEMS, _BRANCH_ENUM_PROJECT_ID
+    prefs = get_prefs(context)
+    project_id = getattr(prefs, "project_id", "") or ""
+    if not project_id or not getattr(prefs, "auth_token", None):
+        _BRANCH_ENUM_ITEMS = [("main", "main", "Default branch")]
+        return
+    _BRANCH_ENUM_PROJECT_ID = project_id
+    branches = _fetch_branches_list(prefs)
+    if branches:
+        _BRANCH_ENUM_ITEMS = [
+            (b["branch_id"], b["branch_name"], f"Branch: {b['branch_name']}")
+            for b in branches
+        ]
+    else:
+        _BRANCH_ENUM_ITEMS = [("main", "main", "Default branch")]
+
+
+def _branch_enum_items(self, context):
+    return _BRANCH_ENUM_ITEMS
+
+
+class BVCS_OT_SwitchBranch(bpy.types.Operator):
+    bl_idname = "bvcs.switch_branch"
+    bl_label = "Switch Branch"
+
+    branch_enum: bpy.props.EnumProperty(
+        name="Branch",
+        description="Choose a branch",
+        items=_branch_enum_items,
+    )
+
+    def execute(self, context):
+        wm = context.window_manager
+        prefs = get_prefs(context)
+
+        if not self.branch_enum:
+            self.report({'ERROR'}, "No branch selected")
+            return {'CANCELLED'}
+
+        # Find the branch name from the enum
+        branches = _fetch_branches_list(prefs)
+        selected = next(
+            (b for b in branches if b["branch_id"] == self.branch_enum),
+            None,
+        )
+        if not selected:
+            self.report({'ERROR'}, "Branch not found")
+            return {'CANCELLED'}
+
+        _set_active_branch(wm, selected["branch_id"], selected["branch_name"])
+        wm["bvcs_last_synced_commit_hash"] = ""
+        self.report({'INFO'}, f"Switched to branch: {selected['branch_name']}")
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        _refresh_branch_enum(context)
+        return context.window_manager.invoke_props_dialog(self)
+
+
+class BVCS_OT_CreateBranch(bpy.types.Operator):
+    bl_idname = "bvcs.create_branch"
+    bl_label = "Create Branch"
+
+    branch_name: bpy.props.StringProperty(
+        name="Branch Name",
+        description="Name for the new branch",
+        default="",
+    )
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        wm = context.window_manager
+
+        if not prefs.project_id:
+            self.report({'ERROR'}, "No project selected")
+            return {'CANCELLED'}
+        if not self.branch_name.strip():
+            self.report({'ERROR'}, "Branch name cannot be empty")
+            return {'CANCELLED'}
+
+        headers = get_auth_headers(prefs)
+        api_base = get_api_base(prefs)
+
+        payload = {"branch_name": self.branch_name.strip()}
+
+        # If we have a current branch HEAD, use it as source
+        active_branch_id = _get_active_branch_id(wm)
+        if active_branch_id:
+            branches = _fetch_branches_list(prefs)
+            current = next((b for b in branches if b["branch_id"] == active_branch_id), None)
+            if current and current.get("head_commit_id"):
+                payload["source_commit_id"] = current["head_commit_id"]
+
+        try:
+            resp = requests.post(
+                f"{api_base}/api/projects/{prefs.project_id}/branches",
+                json=payload,
+                headers=headers,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            new_branch = resp.json()
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to create branch: {e}")
+            return {'CANCELLED'}
+
+        # Switch to the new branch
+        _set_active_branch(wm, new_branch["branch_id"], new_branch["branch_name"])
+        wm["bvcs_last_synced_commit_hash"] = ""
+        self.report({'INFO'}, f"Created and switched to branch: {new_branch['branch_name']}")
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        self.branch_name = ""
+        return context.window_manager.invoke_props_dialog(self)
+
+
+class BVCS_OT_DeleteBranch(bpy.types.Operator):
+    bl_idname = "bvcs.delete_branch"
+    bl_label = "Delete Branch"
+
+    branch_enum: bpy.props.EnumProperty(
+        name="Branch",
+        description="Choose a branch to delete",
+        items=_branch_enum_items,
+    )
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        wm = context.window_manager
+
+        if not self.branch_enum:
+            self.report({'ERROR'}, "No branch selected")
+            return {'CANCELLED'}
+
+        branches = _fetch_branches_list(prefs)
+        selected = next(
+            (b for b in branches if b["branch_id"] == self.branch_enum),
+            None,
+        )
+        if not selected:
+            self.report({'ERROR'}, "Branch not found")
+            return {'CANCELLED'}
+
+        if selected["branch_name"] == "main":
+            self.report({'ERROR'}, "Cannot delete the default branch")
+            return {'CANCELLED'}
+
+        headers = get_auth_headers(prefs)
+        api_base = get_api_base(prefs)
+        try:
+            resp = requests.delete(
+                f"{api_base}/api/projects/{prefs.project_id}/branches/{selected['branch_id']}",
+                headers=headers,
+                timeout=10,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to delete branch: {e}")
+            return {'CANCELLED'}
+
+        # If we deleted the active branch, switch to main
+        if _get_active_branch_id(wm) == selected["branch_id"]:
+            main = next((b for b in branches if b.get("branch_name") == "main"), None)
+            if main:
+                _set_active_branch(wm, main["branch_id"], main["branch_name"])
+            else:
+                wm["bvcs_active_branch_id"] = ""
+                wm["bvcs_active_branch_name"] = "main"
+            wm["bvcs_last_synced_commit_hash"] = ""
+
+        self.report({'INFO'}, f"Deleted branch: {selected['branch_name']}")
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        _refresh_branch_enum(context)
+        return context.window_manager.invoke_props_dialog(self)
+
+
 # ---------------- Push / Pull / Conflicts ----------------
 class BVCS_OT_Push(bpy.types.Operator):
     bl_idname = "bvcs.push"
@@ -1406,7 +1644,7 @@ class BVCS_OT_Push(bpy.types.Operator):
                     try:
                         commits_resp = requests.get(
                             f"{get_api_base(prefs)}/api/projects/{prefs.project_id}/commits",
-                            params={"branch_name": "main"},
+                            params={"branch_name": _get_active_branch_name(bpy.context.window_manager)},
                             headers=get_auth_headers(prefs), timeout=10,
                         )
                         commits_resp.raise_for_status()
@@ -1508,21 +1746,27 @@ class BVCS_OT_Push(bpy.types.Operator):
         headers = get_auth_headers(prefs)
         api_base = get_api_base(prefs)
 
-        # Get main branch ID
-        try:
-            branches_resp = requests.get(
-                f"{api_base}/api/projects/{prefs.project_id}/branches",
-                headers=headers, timeout=10
-            )
-            branches_resp.raise_for_status()
-            branches = branches_resp.json()
-            main_branch = next((b for b in branches if b.get("branch_name") == "main"), None)
-            if not main_branch:
-                self.report({'ERROR'}, "Main branch not found")
+        # Get active branch ID
+        wm = context.window_manager
+        _ensure_active_branch(wm, prefs)
+        active_branch_id = _get_active_branch_id(wm)
+        active_branch_name = _get_active_branch_name(wm)
+        if not active_branch_id:
+            # Fallback: fetch branches and find the active one
+            try:
+                branches_list = _fetch_branches_list(prefs)
+                active_branch = next(
+                    (b for b in branches_list if b.get("branch_name") == active_branch_name),
+                    None,
+                )
+                if not active_branch:
+                    self.report({'ERROR'}, f"Branch '{active_branch_name}' not found")
+                    return {'CANCELLED'}
+                active_branch_id = active_branch["branch_id"]
+                _set_active_branch(wm, active_branch_id, active_branch_name)
+            except Exception as e:
+                self.report({'ERROR'}, f"Failed to fetch branches: {e}")
                 return {'CANCELLED'}
-        except Exception as e:
-            self.report({'ERROR'}, f"Failed to fetch branches: {e}")
-            return {'CANCELLED'}
 
         if not user:
             user = get_logged_in_user(prefs)
@@ -1578,7 +1822,7 @@ class BVCS_OT_Push(bpy.types.Operator):
         # ── Create commit in database ────────────────────────────────────
         try:
             commit_payload = {
-                "branch_id": main_branch["branch_id"],
+                "branch_id": active_branch_id,
                 "commit_message": pending_commit["message"],
                 "objects": commit_objects,
             }
@@ -1675,7 +1919,7 @@ class BVCS_OT_PullProject(bpy.types.Operator):
 
             commits_resp = requests.get(
                 f"{api_base}/api/projects/{project_id}/commits",
-                params={"branch_name": "main"},
+                params={"branch_name": _get_active_branch_name(bpy.context.window_manager)},
                 headers=headers, timeout=10,
             )
             commits_resp.raise_for_status()
@@ -1813,7 +2057,7 @@ class BVCS_OT_PullProject(bpy.types.Operator):
             # ── Fetch latest commit ──────────────────────────────────────
             commits_resp = requests.get(
                 f"{api_base}/api/projects/{project_id}/commits",
-                params={"branch_name": "main"},
+                params={"branch_name": _get_active_branch_name(bpy.context.window_manager)},
                 headers=headers,
                 timeout=10,
             )
@@ -2116,17 +2360,19 @@ class BVCS_OT_ApplyConflictResolutions(bpy.types.Operator):
         self.report({'INFO'}, "Building merge commit...")
 
         try:
-            # Get main branch ID
-            branches_resp = requests.get(
-                f"{api_base}/api/projects/{prefs.project_id}/branches",
-                headers=headers, timeout=10,
-            )
-            branches_resp.raise_for_status()
-            branches = branches_resp.json()
-            main_branch = next((b for b in branches if b.get("branch_name") == "main"), None)
-            if not main_branch:
-                self.report({'ERROR'}, "Main branch not found")
-                return {'CANCELLED'}
+            # Get active branch ID
+            _ensure_active_branch(wm, prefs)
+            merge_branch_id = _get_active_branch_id(wm)
+            if not merge_branch_id:
+                branches_list = _fetch_branches_list(prefs)
+                active_br = next(
+                    (b for b in branches_list if b.get("branch_name") == _get_active_branch_name(wm)),
+                    None,
+                )
+                if not active_br:
+                    self.report({'ERROR'}, f"Branch '{_get_active_branch_name(wm)}' not found")
+                    return {'CANCELLED'}
+                merge_branch_id = active_br["branch_id"]
 
             # Build the full scene snapshot for the merge commit
             parent_objects = _get_parent_commit_objects(prefs)
@@ -2197,7 +2443,7 @@ class BVCS_OT_ApplyConflictResolutions(bpy.types.Operator):
 
             # Create merge commit
             commit_payload = {
-                "branch_id": main_branch["branch_id"],
+                "branch_id": merge_branch_id,
                 "commit_message": merge_msg,
                 "objects": commit_objects,
                 "merge_commit": True,
@@ -2764,6 +3010,17 @@ class BVCS_PT_Panel(bpy.types.Panel):
         if prefs.project_id:
             layout.label(text=f"Project: {prefs.project_id}")
 
+            # ── Branch ──
+            layout.separator()
+            box = layout.box()
+            box.label(text="Branch", icon='OUTLINER_OB_CURVE')
+            branch_name = _get_active_branch_name(wm)
+            box.label(text=f"  Current: {branch_name}", icon='CHECKMARK')
+            row = box.row(align=True)
+            row.operator("bvcs.switch_branch", text="Switch")
+            row.operator("bvcs.create_branch", text="New")
+            row.operator("bvcs.delete_branch", text="Delete")
+
             # ── Object Status / Diff ──
             layout.separator()
             box = layout.box()
@@ -2925,6 +3182,9 @@ classes = [
     BVCS_OT_Commit,
     BVCS_OT_TestS3,
     BVCS_OT_RefreshS3,
+    BVCS_OT_SwitchBranch,
+    BVCS_OT_CreateBranch,
+    BVCS_OT_DeleteBranch,
     BVCS_OT_Push,
     BVCS_OT_PullProject,
     BVCS_OT_LoadProjectFile,

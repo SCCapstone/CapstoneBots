@@ -6,7 +6,8 @@ import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
 import CommitItem from "@/components/CommitItem";
 import ObjectTypeIcon from "@/components/ObjectTypeIcon";
-import type { Commit, Project, ProjectMember, Invitation, MemberRole, BlenderObject, MergeConflict } from "@/lib/projectsApi";
+import BranchSelector from "@/components/BranchSelector";
+import type { Commit, Project, ProjectMember, Invitation, MemberRole, BlenderObject, Branch } from "@/lib/projectsApi";
 import {
   addProjectMember,
   deleteProject,
@@ -20,8 +21,7 @@ import {
   fetchProjectInvitations,
   cancelInvitation,
   fetchObjectDownloadUrl,
-  fetchConflicts,
-  resolveConflict,
+  fetchBranches,
   fetchObjectContent,
 } from "@/lib/projectsApi";
 import { downloadGlbFromStoredJson } from "@/lib/downloadGlb";
@@ -35,9 +35,10 @@ function formatCommitDate(dateString: string): string {
 
 async function loadCommitsWithUsers(
   token: string,
-  projectId: string
+  projectId: string,
+  branchName?: string
 ): Promise<Commit[]> {
-  const rawCommits = await fetchCommits(token, projectId);
+  const rawCommits = await fetchCommits(token, projectId, branchName ? { branchName } : undefined);
   const me = await fetchCurrentUser(token);
   return rawCommits.map((c) => ({
     ...c,
@@ -91,11 +92,9 @@ export default function ProjectPage() {
   const [currentUserId, setCurrentUserId] = useState("");
   const [isOwner, setIsOwner] = useState(false);
 
-  // Merge conflicts state
-  const [conflicts, setConflicts] = useState<MergeConflict[]>([]);
-  const [showConflicts, setShowConflicts] = useState(false);
-  const [conflictsLoading, setConflictsLoading] = useState(false);
-  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  // Branch state
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [currentBranch, setCurrentBranch] = useState<Branch | null>(null);
 
   // Load project name
   useEffect(() => {
@@ -124,21 +123,33 @@ export default function ProjectPage() {
     })();
   }, [token]);
 
-  // Load commits and objects
+  // Load branches on mount
   useEffect(() => {
     if (!token || !projectId) return;
+    (async () => {
+      try {
+        const branchList = await fetchBranches(token, projectId);
+        setBranches(branchList);
+        const main = branchList.find((b) => b.branch_name === "main") ?? branchList[0] ?? null;
+        setCurrentBranch(main);
+      } catch { }
+    })();
+  }, [token, projectId]);
+
+  // Load commits and objects when branch changes
+  useEffect(() => {
+    if (!token || !projectId || !currentBranch) return;
     const loadAll = async () => {
       setCommitsLoading(true);
       setCommitsError("");
       setObjectsLoading(true);
       try {
-        const data = await loadCommitsWithUsers(token, projectId);
+        const data = await loadCommitsWithUsers(token, projectId, currentBranch.branch_name);
         setCommits(data);
         if (data.length > 0) {
           const latest = data[0];
           const objs = await fetchCommitObjects(token, projectId, latest.commit_id);
           setObjects(objs);
-          // Set count for latest commit
           setCommitObjectCounts((prev) => ({ ...prev, [latest.commit_id]: objs.length }));
         } else {
           setObjects([]);
@@ -153,18 +164,7 @@ export default function ProjectPage() {
       }
     };
     loadAll();
-  }, [token, projectId]);
-
-  // Load conflicts on mount
-  useEffect(() => {
-    if (!token || !projectId) return;
-    (async () => {
-      try {
-        const data = await fetchConflicts(token, projectId);
-        setConflicts(data);
-      } catch { }
-    })();
-  }, [token, projectId]);
+  }, [token, projectId, currentBranch]);
 
   // Load members and invitations
   useEffect(() => {
@@ -239,36 +239,6 @@ export default function ProjectPage() {
 
   const handleOpenCommits = () => { if (token) setShowCommits(true); };
 
-  // Load conflicts
-  const loadConflicts = async () => {
-    if (!token || !projectId) return;
-    setConflictsLoading(true);
-    try {
-      const data = await fetchConflicts(token, projectId);
-      setConflicts(data);
-    } catch {
-      setConflicts([]);
-    } finally {
-      setConflictsLoading(false);
-    }
-  };
-
-  const handleOpenConflicts = () => {
-    if (!token) return;
-    setShowConflicts(true);
-    loadConflicts();
-  };
-
-  const handleResolveConflict = async (conflictId: string) => {
-    if (!token) return;
-    setResolvingId(conflictId);
-    try {
-      await resolveConflict(token, projectId, conflictId);
-      setConflicts((prev) => prev.filter((c) => c.conflict_id !== conflictId));
-    } catch { }
-    setResolvingId(null);
-  };
-
   const handleSendInvite = async (e: FormEvent) => {
     e.preventDefault();
     if (!token || !inviteInput.trim()) return;
@@ -340,9 +310,16 @@ export default function ProjectPage() {
               <h1 className="text-2xl font-semibold text-white">{displayName}</h1>
             </div>
             <div className="flex items-center gap-2">
-              <button type="button" onClick={handleOpenConflicts} className={`rounded-lg border px-3 py-1 text-[11px] transition ${conflicts.length > 0 ? "border-red-500/70 text-red-300 hover:bg-red-500/10" : "border-slate-700 text-slate-300 hover:border-slate-500"}`}>
-                {conflicts.length > 0 ? `${conflicts.length} Conflicts` : "Conflicts"}
-              </button>
+              {token && (
+                <BranchSelector
+                  token={token}
+                  projectId={projectId}
+                  branches={branches}
+                  currentBranch={currentBranch}
+                  onBranchChange={(b) => setCurrentBranch(b)}
+                  onBranchesUpdated={(updated) => setBranches(updated)}
+                />
+              )}
               <button type="button" onClick={handleOpenCommits} className="rounded-lg border border-slate-700 px-3 py-1 text-[11px] text-slate-300 transition hover:border-sky-500 hover:text-sky-200">
                 {commitCount} Commits
               </button>
@@ -356,10 +333,10 @@ export default function ProjectPage() {
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-xs">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-3">
-                <button className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200 hover:border-slate-500">
+                <span className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200">
                   <span className="h-2 w-2 rounded-full bg-green-500" />
-                  <span>history</span>
-                </button>
+                  <span>{currentBranch?.branch_name ?? "main"}</span>
+                </span>
                 {commits.length > 0 ? (
                   <p className="text-slate-400">
                     <span className="font-medium text-slate-200">{commits[0].author_username || "Unknown User"}</span>{" "}
@@ -624,53 +601,6 @@ export default function ProjectPage() {
         </div>
       )}
 
-      {/* Conflicts overlay */}
-      {showConflicts && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60">
-          <div className="w-full max-w-2xl rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-xl">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-white">Merge Conflicts</h2>
-              <button type="button" onClick={() => setShowConflicts(false)} className="text-xs text-slate-400 hover:text-slate-100">
-                ✕
-              </button>
-            </div>
-            {conflictsLoading && <p className="text-xs text-slate-400">Loading conflicts...</p>}
-            {!conflictsLoading && conflicts.length === 0 && (
-              <p className="text-xs text-slate-400">No unresolved merge conflicts.</p>
-            )}
-            {!conflictsLoading && conflicts.length > 0 && (
-              <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
-                {conflicts.map((c) => (
-                  <div key={c.conflict_id} className="rounded-lg border border-slate-700 bg-slate-800/60 p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-white">{c.object_name}</span>
-                        <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-300">
-                          {c.conflict_type}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleResolveConflict(c.conflict_id)}
-                        disabled={resolvingId === c.conflict_id}
-                        className="rounded-lg border border-slate-600 px-2 py-1 text-[10px] text-slate-300 transition hover:border-green-500/50 hover:text-green-300 disabled:opacity-50"
-                      >
-                        {resolvingId === c.conflict_id ? "Resolving..." : "Mark Resolved"}
-                      </button>
-                    </div>
-                    <p className="mt-1 text-[10px] text-slate-500">
-                      Created {formatCommitDate(c.created_at)}
-                    </p>
-                    <p className="mt-0.5 text-[10px] text-slate-400">
-                      Push/pull conflicts are resolved in the Blender addon. Server-side conflicts can be marked resolved here.
-                    </p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
