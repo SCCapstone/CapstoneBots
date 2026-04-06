@@ -15,6 +15,7 @@ Follow these quick steps to install and enable the **Blender Version Control Sys
 blender_vcs.zip
 └── blender_vcs/
     └── __init__.py
+    └── (any other file in this folder)
 ```
 
 ---
