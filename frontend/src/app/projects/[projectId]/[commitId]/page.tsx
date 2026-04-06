@@ -53,7 +53,7 @@ export default function CommitDetailPage() {
         setObjects(objs);
 
         // Find the commit metadata from the commits list
-        const allCommits = await fetchCommits(token, projectId, "main");
+        const allCommits = await fetchCommits(token, projectId);
         const thisCommit = allCommits.find((c) => c.commit_id === commitId);
         setCommit(thisCommit || null);
 

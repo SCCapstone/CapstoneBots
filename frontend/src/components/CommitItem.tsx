@@ -28,10 +28,20 @@ export default function CommitItem({ commit, projectId, objectCount }: CommitIte
           {commit.commit_message || "(no message)"}
         </p>
         <p className="mt-1 text-[11px] text-slate-500">
-          <span className="inline-flex items-center gap-1.5">
+          <span className="inline-flex items-center gap-1.5 flex-wrap">
             <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
               {shortHash}
             </span>
+            {commit.branch_name && (
+              <span className="rounded bg-sky-900/50 px-1.5 py-0.5 text-[10px] text-sky-300 border border-sky-700/40">
+                {commit.branch_name}
+              </span>
+            )}
+            {commit.merge_commit && (
+              <span className="rounded bg-purple-900/50 px-1.5 py-0.5 text-[10px] text-purple-300 border border-purple-700/40">
+                merge
+              </span>
+            )}
             <span>· {formatted}</span>
             {commit.author_username && (
               <span>· {commit.author_username}</span>

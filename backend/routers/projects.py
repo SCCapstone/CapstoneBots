@@ -11,12 +11,12 @@ It provides Git-like version control functionality for Blender projects, includi
 The API mimics Git workflows adapted for 3D asset collaboration.
 """
 
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 import hashlib
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, text as sa_text
 from sqlalchemy.orm import joinedload
@@ -25,7 +25,7 @@ from sqlalchemy.orm import joinedload
 # removed from models import MergeConflict,
 from database import get_db
 from models import (
-    Project, Commit, BlenderObject, ObjectLock,
+    Project, Commit, Branch, BlenderObject, ObjectLock,
     User, ProjectMember, ProjectInvitation,
     MemberRole, InvitationStatus, INVITE_EXPIRY_DAYS, role_at_least,
 )
@@ -34,7 +34,7 @@ from schemas import (
     CommitCreate, CommitResponse, CommitCreateRequest,
     BlenderObjectCreate, BlenderObjectResponse,
     ObjectLockCreate, ObjectLockResponse,
-    MergeConflictCreate, MergeConflictResponse,
+    BranchCreate, BranchResponse, BranchUpdate, MergeRequest, MergeConflictDetail,
     ProjectMemberAdd, ProjectMemberResponse, ProjectMemberRemove, ProjectWithMembersResponse,
     InvitationCreate, InvitationResponse, MemberRoleUpdate,
 )
@@ -44,6 +44,77 @@ from utils.project_utils import delete_project_data
 
 # Initialize the router for project-related endpoints
 router = APIRouter()
+
+
+# ============== Branch Helpers ==============
+
+async def _resolve_branch(
+    db: AsyncSession,
+    project_id: UUID,
+    branch_name: Optional[str] = None,
+    branch_id: Optional[UUID] = None,
+) -> Branch:
+    """Resolve a branch by name or ID. Raises 404 if not found."""
+    if branch_id:
+        result = await db.execute(
+            select(Branch).where(Branch.branch_id == branch_id, Branch.project_id == project_id)
+        )
+    elif branch_name:
+        result = await db.execute(
+            select(Branch).where(Branch.branch_name == branch_name, Branch.project_id == project_id)
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Provide branch_name or branch_id")
+    branch = result.scalar_one_or_none()
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    return branch
+
+
+async def _get_default_branch(db: AsyncSession, project_id: UUID) -> Branch:
+    """Get the project's default branch (usually 'main')."""
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return await _resolve_branch(db, project_id, branch_name=project.default_branch)
+
+
+async def _find_common_ancestor(
+    db: AsyncSession, commit_a_id: UUID, commit_b_id: UUID
+) -> Optional[UUID]:
+    """Walk both parent chains to find the merge base."""
+    ancestors_a = set()
+    current = commit_a_id
+    while current:
+        ancestors_a.add(current)
+        commit = await db.get(Commit, current)
+        current = commit.parent_commit_id if commit else None
+
+    current = commit_b_id
+    while current:
+        if current in ancestors_a:
+            return current
+        commit = await db.get(Commit, current)
+        current = commit.parent_commit_id if commit else None
+    return None
+
+
+def _commit_to_response(commit: Commit) -> CommitResponse:
+    """Convert a Commit ORM object to CommitResponse, including branch_name."""
+    return CommitResponse(
+        commit_id=commit.commit_id,
+        project_id=commit.project_id,
+        branch_id=commit.branch_id,
+        parent_commit_id=commit.parent_commit_id,
+        author_id=commit.author_id,
+        commit_hash=commit.commit_hash,
+        commit_message=commit.commit_message,
+        committed_at=commit.committed_at,
+        merge_commit=commit.merge_commit,
+        merge_parent_id=commit.merge_parent_id,
+        branch_name=commit.branch.branch_name if commit.branch else None,
+    )
+
 
 # ============== Project Routes ==============
 
@@ -148,6 +219,15 @@ async def create_project(
     )
     db.add(owner_member)
 
+    # Auto-create the default "main" branch
+    main_branch = Branch(
+        project_id=new_project.project_id,
+        branch_name="main",
+        head_commit_id=None,
+        created_by=current_user.user_id,
+    )
+    db.add(main_branch)
+
     await db.commit()
     await db.refresh(new_project)  # Refresh to get all generated fields
     return new_project
@@ -196,24 +276,48 @@ async def delete_project(
 @router.get("/{project_id}/commits", response_model=List[CommitResponse])
 async def get_commit_history(
         project_id: UUID,
+        branch_name: Optional[str] = Query(None),
+        branch_id: Optional[UUID] = Query(None),
         db: AsyncSession = Depends(get_db),
         current_user: User = Depends(get_current_user),
 ):
-    """Get commit history for a project (members only)."""
+    """Get commit history for a project, optionally filtered by branch (members only)."""
     await check_project_access(project_id, current_user.user_id, db)
 
-    # Get commits for this project, newest first
+    # If branch filter provided, walk the commit chain from branch HEAD
+    if branch_name or branch_id:
+        branch = await _resolve_branch(db, project_id, branch_name=branch_name, branch_id=branch_id)
+        if not branch.head_commit_id:
+            return []  # Empty branch
+
+        # Walk the parent chain from branch HEAD
+        commits = []
+        current_id = branch.head_commit_id
+        visited = set()
+        while current_id and current_id not in visited:
+            visited.add(current_id)
+            result = await db.execute(
+                select(Commit)
+                .where(Commit.commit_id == current_id)
+                .options(joinedload(Commit.author), joinedload(Commit.branch))
+            )
+            commit = result.scalars().unique().first()
+            if not commit:
+                break
+            commits.append(commit)
+            current_id = commit.parent_commit_id
+        return [_commit_to_response(c) for c in commits]
+
+    # No branch filter: return all commits, newest first
     commits_result = await db.execute(
         select(Commit)
-        .where(
-            Commit.project_id == project_id,
-            )
-        .options(joinedload(Commit.author))  # keep eager-loaded author
+        .where(Commit.project_id == project_id)
+        .options(joinedload(Commit.author), joinedload(Commit.branch))
         .order_by(Commit.committed_at.desc())
     )
 
     commits = commits_result.scalars().unique().all()
-    return commits
+    return [_commit_to_response(c) for c in commits]
 
 @router.post("/{project_id}/commits", response_model=CommitResponse, status_code=status.HTTP_201_CREATED)
 async def create_commit(
@@ -254,15 +358,16 @@ async def create_commit(
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    latest_commit_result = await db.execute(
-        select(Commit)
-        .where(Commit.project_id == project_id)
-        .order_by(Commit.committed_at.desc())
-        .limit(1)
-    )
-    latest_commit = latest_commit_result.scalar_one_or_none()
+    # Resolve the target branch
+    if data.branch_id:
+        branch = await _resolve_branch(db, project_id, branch_id=data.branch_id)
+    else:
+        branch = await _get_default_branch(db, project_id)
 
-    # Enforce object locks
+    # Parent commit is the branch's current HEAD (not just latest by timestamp)
+    parent_commit_id = branch.head_commit_id
+
+    # Enforce object locks (scoped to this branch)
     for obj_data in data.objects:
         obj_name = obj_data.object_name
         lock_query = (
@@ -270,7 +375,8 @@ async def create_commit(
             .where(
                 ObjectLock.project_id == project_id,
                 ObjectLock.object_name == obj_name,
-                )
+                ObjectLock.branch_id == branch.branch_id,
+            )
         )
         lock_result = await db.execute(lock_query)
         lock = lock_result.scalar_one_or_none()
@@ -301,7 +407,8 @@ async def create_commit(
     # Create the commit record
     new_commit = Commit(
         project_id=project_id,
-        parent_commit_id=latest_commit.commit_id if latest_commit else None,
+        branch_id=branch.branch_id,
+        parent_commit_id=parent_commit_id,
         author_id=current_user.user_id,
         commit_message=data.commit_message,
         commit_hash=commit_hash,
@@ -320,9 +427,14 @@ async def create_commit(
         )
         db.add(blender_obj)
 
+    # Advance the branch HEAD to this new commit
+    branch.head_commit_id = new_commit.commit_id
+
     await db.commit()
     await db.refresh(new_commit)
-    return new_commit
+    # Eager-load the branch for the response
+    await db.refresh(new_commit, attribute_names=["branch"])
+    return _commit_to_response(new_commit)
 
 @router.get("/{project_id}/commits/{commit_id}/objects", response_model=List[BlenderObjectResponse])
 async def get_commit_objects(
@@ -423,23 +535,31 @@ async def lock_object(
     # Editors and above can acquire locks
     await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
 
-    # Check if the object is already locked in this project
+    # Resolve branch for the lock
+    if lock_data.branch_id:
+        branch = await _resolve_branch(db, project_id, branch_id=lock_data.branch_id)
+    else:
+        branch = await _get_default_branch(db, project_id)
+
+    # Check if the object is already locked on this branch
     existing_lock = (
         select(ObjectLock)
         .where(
             ObjectLock.project_id == project_id,
             ObjectLock.object_name == lock_data.object_name,
-            )
+            ObjectLock.branch_id == branch.branch_id,
+        )
     )
     result = await db.execute(existing_lock)
     if result.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Object is already locked")
+        raise HTTPException(status_code=409, detail="Object is already locked on this branch")
 
     # Create the lock record
     new_lock = ObjectLock(
         project_id=project_id,
         object_name=lock_data.object_name,
-        locked_by=current_user.user_id,  # Infer from auth token
+        locked_by=current_user.user_id,
+        branch_id=branch.branch_id,
         expires_at=lock_data.expires_at,
     )
     db.add(new_lock)
@@ -469,66 +589,314 @@ async def unlock_object(
     await db.delete(lock)
     await db.commit()
 
-# # ============== Merge Conflict Routes ==============
-# 
-# @router.post("/{project_id}/conflicts", response_model=MergeConflictResponse, status_code=status.HTTP_201_CREATED)
-# async def create_conflict(
-#         project_id: UUID,
-#         data: MergeConflictCreate,
-#         db: AsyncSession = Depends(get_db),
-#         current_user: User = Depends(get_current_user),
-# ):
-#     """Record a merge conflict detected by the addon (editors and above)."""
-#     await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
-#     conflict = MergeConflict(
-#         project_id=project_id,
-#         source_commit_id=data.source_commit_id,
-#         target_branch_id=data.target_branch_id,
-#         object_name=data.object_name,
-#         conflict_type=data.conflict_type,
-#     )
-#     db.add(conflict)
-#     await db.commit()
-#     await db.refresh(conflict)
-#     return conflict
-# 
-# 
-# @router.get("/{project_id}/conflicts", response_model=List[MergeConflictResponse])
-# async def get_unresolved_conflicts(
-#         project_id: UUID,
-#         db: AsyncSession = Depends(get_db),
-#         current_user: User = Depends(get_current_user),
-# ):
-#     """Get all unresolved merge conflicts in a project (members only)."""
-#     await check_project_access(project_id, current_user.user_id, db)
-#     query = (
-#         select(MergeConflict)
-#         .where(
-#             MergeConflict.project_id == project_id,
-#             MergeConflict.resolved == False,
-#             )
-#         .order_by(MergeConflict.created_at)
-#     )
-#     result = await db.execute(query)
-#     return result.scalars().all()
-# 
-# @router.put("/{project_id}/conflicts/{conflict_id}", response_model=MergeConflictResponse)
-# async def resolve_conflict(
-#         project_id: UUID,
-#         conflict_id: UUID,
-#         db: AsyncSession = Depends(get_db),
-#         current_user: User = Depends(get_current_user),
-# ):
-#     """Mark a merge conflict as resolved (editors and above)."""
-#     await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
-#     conflict = await db.get(MergeConflict, conflict_id)
-#     if not conflict or conflict.project_id != project_id:
-#         raise HTTPException(status_code=404, detail="Conflict not found")
-#     conflict.resolved = True
-#     await db.commit()
-#     await db.refresh(conflict)
-#     return conflict
-# 
+# ============== Branch Routes ==============
+
+@router.get("/{project_id}/branches", response_model=List[BranchResponse])
+async def list_branches(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List all branches for a project (members only)."""
+    await check_project_access(project_id, current_user.user_id, db)
+    result = await db.execute(
+        select(Branch)
+        .where(Branch.project_id == project_id)
+        .order_by(Branch.created_at)
+    )
+    return result.scalars().all()
+
+
+@router.post("/{project_id}/branches", response_model=BranchResponse, status_code=status.HTTP_201_CREATED)
+async def create_branch(
+    project_id: UUID,
+    data: BranchCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a new branch. If source_commit_id is omitted, branches from the default branch HEAD."""
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+
+    # Check for duplicate name
+    existing = await db.execute(
+        select(Branch).where(
+            Branch.project_id == project_id,
+            Branch.branch_name == data.branch_name,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail=f"Branch '{data.branch_name}' already exists")
+
+    # Determine source commit
+    if data.source_commit_id:
+        source_commit = await db.get(Commit, data.source_commit_id)
+        if not source_commit or source_commit.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Source commit not found in this project")
+        head_commit_id = data.source_commit_id
+    else:
+        default_branch = await _get_default_branch(db, project_id)
+        head_commit_id = default_branch.head_commit_id
+
+    # Determine parent branch (the branch that owns the source commit)
+    parent_branch_id = None
+    if head_commit_id:
+        source_commit = await db.get(Commit, head_commit_id)
+        if source_commit:
+            parent_branch_id = source_commit.branch_id
+
+    new_branch = Branch(
+        project_id=project_id,
+        branch_name=data.branch_name,
+        head_commit_id=head_commit_id,
+        parent_branch_id=parent_branch_id,
+        created_by=current_user.user_id,
+    )
+    db.add(new_branch)
+    await db.commit()
+    await db.refresh(new_branch)
+    return new_branch
+
+
+@router.get("/{project_id}/branches/{branch_id}", response_model=BranchResponse)
+async def get_branch(
+    project_id: UUID,
+    branch_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get details of a specific branch."""
+    await check_project_access(project_id, current_user.user_id, db)
+    return await _resolve_branch(db, project_id, branch_id=branch_id)
+
+
+@router.put("/{project_id}/branches/{branch_id}", response_model=BranchResponse)
+async def update_branch(
+    project_id: UUID,
+    branch_id: UUID,
+    data: BranchUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Rename a branch. Cannot rename the default branch."""
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+    branch = await _resolve_branch(db, project_id, branch_id=branch_id)
+
+    project = await db.get(Project, project_id)
+    if branch.branch_name == project.default_branch:
+        raise HTTPException(status_code=400, detail="Cannot rename the default branch")
+
+    if data.branch_name:
+        # Check for duplicate name
+        existing = await db.execute(
+            select(Branch).where(
+                Branch.project_id == project_id,
+                Branch.branch_name == data.branch_name,
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail=f"Branch '{data.branch_name}' already exists")
+        branch.branch_name = data.branch_name
+
+    await db.commit()
+    await db.refresh(branch)
+    return branch
+
+
+@router.delete("/{project_id}/branches/{branch_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_branch(
+    project_id: UUID,
+    branch_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a branch. Cannot delete the default branch. Commits are NOT deleted."""
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+    branch = await _resolve_branch(db, project_id, branch_id=branch_id)
+
+    project = await db.get(Project, project_id)
+    if branch.branch_name == project.default_branch:
+        raise HTTPException(status_code=400, detail="Cannot delete the default branch")
+
+    await db.delete(branch)
+    await db.commit()
+
+
+@router.post("/{project_id}/branches/{branch_id}/merge", response_model=CommitResponse)
+async def merge_branch(
+    project_id: UUID,
+    branch_id: UUID,
+    data: MergeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Merge source_branch into this branch (target).
+
+    - Fast-forward if target HEAD is an ancestor of source HEAD.
+    - Auto-merge if no object-level conflicts.
+    - Returns 409 with conflict details if objects conflict.
+    """
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+
+    target_branch = await _resolve_branch(db, project_id, branch_id=branch_id)
+    source_branch = await _resolve_branch(db, project_id, branch_id=data.source_branch_id)
+
+    if not source_branch.head_commit_id:
+        raise HTTPException(status_code=400, detail="Source branch has no commits")
+
+    # If target is empty, just point to source HEAD
+    if not target_branch.head_commit_id:
+        target_branch.head_commit_id = source_branch.head_commit_id
+        await db.commit()
+        await db.refresh(target_branch)
+        commit = await db.get(Commit, target_branch.head_commit_id)
+        await db.refresh(commit, attribute_names=["branch", "author"])
+        return _commit_to_response(commit)
+
+    source_head = source_branch.head_commit_id
+    target_head = target_branch.head_commit_id
+
+    if source_head == target_head:
+        raise HTTPException(status_code=400, detail="Branches are already at the same commit")
+
+    # Check if target is ancestor of source → fast-forward
+    common_ancestor = await _find_common_ancestor(db, source_head, target_head)
+
+    if common_ancestor == target_head:
+        # Fast-forward: target HEAD is ancestor of source HEAD
+        target_branch.head_commit_id = source_head
+        await db.commit()
+        commit = await db.get(Commit, source_head)
+        await db.refresh(commit, attribute_names=["branch", "author"])
+        return _commit_to_response(commit)
+
+    if common_ancestor == source_head:
+        raise HTTPException(status_code=400, detail="Target branch is already ahead of source; nothing to merge")
+
+    # Three-way merge: compare objects at source, target, and common ancestor
+    source_objects = {}
+    target_objects = {}
+    ancestor_objects = {}
+
+    for label, commit_id, obj_map in [
+        ("source", source_head, source_objects),
+        ("target", target_head, target_objects),
+    ]:
+        result = await db.execute(
+            select(BlenderObject).where(BlenderObject.commit_id == commit_id)
+        )
+        for obj in result.scalars().all():
+            obj_map[obj.object_name] = obj
+
+    if common_ancestor:
+        result = await db.execute(
+            select(BlenderObject).where(BlenderObject.commit_id == common_ancestor)
+        )
+        for obj in result.scalars().all():
+            ancestor_objects[obj.object_name] = obj
+
+    # Detect conflicts
+    all_names = set(source_objects) | set(target_objects) | set(ancestor_objects)
+    conflicts = []
+    merged_objects = []  # Objects for the merge commit if no conflicts
+
+    for name in all_names:
+        src = source_objects.get(name)
+        tgt = target_objects.get(name)
+        anc = ancestor_objects.get(name)
+
+        src_hash = src.blob_hash if src else None
+        tgt_hash = tgt.blob_hash if tgt else None
+        anc_hash = anc.blob_hash if anc else None
+
+        if src_hash == tgt_hash:
+            # Both agree — use either (prefer target)
+            if tgt:
+                merged_objects.append(tgt)
+            elif src:
+                merged_objects.append(src)
+            continue
+
+        if src_hash == anc_hash:
+            # Only target changed — use target version
+            if tgt:
+                merged_objects.append(tgt)
+            # else: target deleted it, no conflict
+            continue
+
+        if tgt_hash == anc_hash:
+            # Only source changed — use source version
+            if src:
+                merged_objects.append(src)
+            # else: source deleted it, no conflict
+            continue
+
+        # Both changed differently → conflict
+        conflict_type = "MODIFIED_BOTH"
+        if not src:
+            conflict_type = "DELETED_LOCALLY"
+        elif not tgt:
+            conflict_type = "DELETED_REMOTELY"
+
+        conflicts.append(MergeConflictDetail(
+            object_name=name,
+            conflict_type=conflict_type,
+            source_blob_hash=src_hash,
+            target_blob_hash=tgt_hash,
+        ))
+
+    if conflicts:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Merge conflicts detected",
+                "conflicts": [c.model_dump() for c in conflicts],
+                "source_branch_id": str(source_branch.branch_id),
+                "target_branch_id": str(target_branch.branch_id),
+                "common_ancestor_commit_id": str(common_ancestor) if common_ancestor else None,
+            },
+        )
+
+    # No conflicts — create auto-merge commit
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    message = data.commit_message or f"Merge branch '{source_branch.branch_name}' into {target_branch.branch_name}"
+    commit_content = f"{project_id}{current_user.user_id}{message}{now.isoformat()}"
+    commit_hash = hashlib.sha256(commit_content.encode()).hexdigest()
+
+    merge_commit = Commit(
+        project_id=project_id,
+        branch_id=target_branch.branch_id,
+        parent_commit_id=target_head,
+        author_id=current_user.user_id,
+        commit_message=message,
+        commit_hash=commit_hash,
+        committed_at=now,
+        merge_commit=True,
+        merge_parent_id=source_head,
+    )
+    db.add(merge_commit)
+    await db.flush()
+
+    # Add merged objects to the merge commit
+    for obj in merged_objects:
+        new_obj = BlenderObject(
+            commit_id=merge_commit.commit_id,
+            object_name=obj.object_name,
+            object_type=obj.object_type,
+            json_data_path=obj.json_data_path,
+            mesh_data_path=obj.mesh_data_path,
+            parent_object_id=obj.parent_object_id,
+            blob_hash=obj.blob_hash,
+        )
+        db.add(new_obj)
+
+    # Advance target branch HEAD
+    target_branch.head_commit_id = merge_commit.commit_id
+
+    await db.commit()
+    await db.refresh(merge_commit, attribute_names=["branch", "author"])
+    return _commit_to_response(merge_commit)
+
 
 # ============== Project Collaboration Routes ==============
 

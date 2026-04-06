@@ -1,4 +1,4 @@
-"""Remove branch feature schema objects.
+"""Remove branch feature and merge_conflicts table.
 
 Revision ID: 006
 Create Date: 2026-04-02
@@ -7,6 +7,7 @@ This migration removes branch-specific database structures:
 - drops branches table
 - removes branch columns from commits, object_locks, and projects
 - replaces merge_conflicts.target_branch_id with target_commit_id
+- drops merge_conflicts table entirely
 """
 
 from alembic import op
@@ -112,6 +113,10 @@ def upgrade() -> None:
         if has_constraint("branches", "fk_branches_head_commit_id"):
             op.drop_constraint("fk_branches_head_commit_id", "branches", type_="foreignkey")
         op.drop_table("branches")
+
+    # 6) Drop merge_conflicts table (absorbed from 006_remove_merge_conflict_model).
+    if has_table("merge_conflicts"):
+        op.drop_table("merge_conflicts")
 
 
 def downgrade() -> None:

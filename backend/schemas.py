@@ -66,6 +66,7 @@ class ProjectUpdate(BaseModel):
 class ProjectResponse(ProjectBase):
     project_id: UUID
     owner_id: UUID
+    default_branch: str = "main"
     created_at: datetime
     updated_at: datetime
 
@@ -82,14 +83,51 @@ class CommitCreate(CommitBase):
 class CommitResponse(CommitBase):
     commit_id: UUID
     project_id: UUID
+    branch_id: Optional[UUID] = None
     parent_commit_id: Optional[UUID]
     author_id: Optional[UUID]
     commit_hash: str
     committed_at: datetime
     merge_commit: bool
     merge_parent_id: Optional[UUID]
+    branch_name: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+# ============== Branch Schemas ==============
+class BranchCreate(BaseModel):
+    branch_name: str
+    source_commit_id: Optional[UUID] = None  # If None, branches from default branch HEAD
+
+class BranchResponse(BaseModel):
+    branch_id: UUID
+    project_id: UUID
+    branch_name: str
+    head_commit_id: Optional[UUID]
+    parent_branch_id: Optional[UUID]
+    created_at: datetime
+    created_by: Optional[UUID]
+
+    model_config = ConfigDict(from_attributes=True)
+
+class BranchUpdate(BaseModel):
+    branch_name: Optional[str] = None
+
+class MergeRequest(BaseModel):
+    source_branch_id: UUID  # Branch to merge FROM
+    commit_message: Optional[str] = None
+
+class MergeConflictDetail(BaseModel):
+    object_name: str
+    conflict_type: str  # MODIFIED_BOTH, DELETED_LOCALLY, DELETED_REMOTELY
+    source_blob_hash: Optional[str] = None
+    target_blob_hash: Optional[str] = None
+
+class MergeConflictResponse(BaseModel):
+    conflicts: List["MergeConflictDetail"]
+    source_branch_id: UUID
+    target_branch_id: UUID
+    common_ancestor_commit_id: Optional[UUID]
 
 # ============== Blender Object Schemas ==============
 class BlenderObjectBase(BaseModel):
@@ -115,6 +153,7 @@ class CommitCreateRequest(BaseModel):
     # author_id: UUID | Removed to be inferred from auth token
     commit_message: str
     objects: List[BlenderObjectCreate]
+    branch_id: Optional[UUID] = None  # If None, uses project's default branch
     merge_commit: bool = False
     merge_parent_id: Optional[UUID] = None
 
@@ -124,35 +163,20 @@ class ObjectLockBase(BaseModel):
 
 class ObjectLockCreate(ObjectLockBase):
     expires_at: datetime
+    branch_id: Optional[UUID] = None  # If None, uses project's default branch
     # locked_by: UUID | Removed to be inferred from auth token
 
 class ObjectLockResponse(ObjectLockBase):
     lock_id: UUID
     project_id: UUID
     locked_by: UUID
+    branch_id: Optional[UUID] = None
     locked_at: datetime
     expires_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
-# ============== Merge Conflict Schemas ==============
-class MergeConflictBase(BaseModel):
-    object_name: str
-    conflict_type: str
-
-class MergeConflictCreate(MergeConflictBase):
-    source_commit_id: UUID
-    target_branch_id: UUID
-
-class MergeConflictResponse(MergeConflictBase):
-    conflict_id: UUID
-    project_id: UUID
-    source_commit_id: UUID
-    target_commit_id: UUID
-    resolved: bool
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
+# ============== (Merge Conflict DB schemas removed — conflicts are now returned inline by the merge endpoint) ==============
 
 # ============== Project Metadata Schemas ==============
 class ProjectMetadataBase(BaseModel):
