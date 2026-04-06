@@ -260,6 +260,53 @@ async def get_object_download_url(
         raise HTTPException(status_code=500, detail="Error generating download URL")
 
 
+@router.get("/{project_id}/objects/content")
+async def get_object_content(
+    project_id: UUID,
+    path: str,
+    db: AsyncSession = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Proxy-download raw file content from S3 by path.
+
+    Unlike ``download-url`` (which returns a presigned URL), this streams the
+    actual bytes through the backend so the browser never hits S3 directly —
+    avoiding CORS issues for in-browser processing like GLB export.
+    """
+    await check_project_access(project_id, current_user.user_id, db)
+
+    if not path or not path.strip():
+        raise HTTPException(status_code=400, detail="path is required")
+
+    normalized = path.strip()
+    expected_prefix = f"projects/{project_id}/"
+    if not normalized.startswith(expected_prefix):
+        raise HTTPException(status_code=403, detail="Path does not belong to this project")
+
+    try:
+        if normalized.endswith(".json"):
+            json_data = storage.download_object_json(normalized)
+            data = json.dumps(json_data).encode("utf-8")
+            media_type = "application/json"
+        else:
+            data = storage.download_object_mesh(normalized)
+            media_type = "application/octet-stream"
+        return StreamingResponse(
+            iter([data]),
+            media_type=media_type,
+        )
+    except S3Error as e:
+        if e.code == "NoSuchKey":
+            raise HTTPException(status_code=404, detail="Object not found in storage")
+        logger.error(f"S3 error downloading content: {e}")
+        raise HTTPException(status_code=500, detail="Error downloading content")
+    except Exception as e:
+        logger.error(f"Error downloading content: {e}")
+        raise HTTPException(status_code=500, detail="Error downloading content")
+
+
 # ============== Object Download Routes ==============
 
 @router.get("/{project_id}/commits/{commit_id}/download", response_class=StreamingResponse)
