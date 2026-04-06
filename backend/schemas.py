@@ -242,7 +242,7 @@ class VersionHistoryResponse(BaseModel):
     commit_id: UUID
     commit_hash: str
     commit_message: str
-    author_id: UUID
+    author_id: Optional[UUID] = None
     committed_at: datetime
     snapshot_path: Optional[str]
     snapshot_size: Optional[int]
