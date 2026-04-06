@@ -115,3 +115,34 @@ def test_me_endpoint(client):
     assert me_data["user_id"] == registered_user["user_id"]
     assert me_data["username"] == username
     assert me_data["email"] == email
+
+
+def test_refresh_token(client):
+    """A valid token can be refreshed for a new one."""
+    username = f"refresh_{uuid4().hex[:8]}"
+    email = f"refresh_{uuid4().hex[:8]}@example.com"
+    password = "refreshpass"
+
+    client.post("/api/auth/register", json={"username": username, "email": email, "password": password})
+    verify_email(client, email)
+
+    r = client.post("/api/auth/login", json={"email": email, "password": password})
+    assert r.status_code == 200
+    original_token = r.json()["access_token"]
+
+    # Refresh
+    r = client.post("/api/auth/refresh", headers={"Authorization": f"Bearer {original_token}"})
+    assert r.status_code == 200
+    new_token = r.json()["access_token"]
+    assert r.json()["token_type"] == "bearer"
+
+    # New token should work
+    r = client.get("/api/auth/me", headers={"Authorization": f"Bearer {new_token}"})
+    assert r.status_code == 200
+    assert r.json()["email"] == email
+
+
+def test_refresh_token_without_auth(client):
+    """Refresh without a token should fail."""
+    r = client.post("/api/auth/refresh")
+    assert r.status_code == 401
