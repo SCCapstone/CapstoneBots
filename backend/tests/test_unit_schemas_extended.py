@@ -121,14 +121,14 @@ class TestProjectUpdateSchema:
 
 class TestBranchCreateSchema:
     def test_valid_branch(self):
-        b = BranchCreate(name="feature/new-mesh")
-        assert b.name == "feature/new-mesh"
-        assert b.parent_branch_id is None
+        b = BranchCreate(branch_name="feature/new-mesh")
+        assert b.branch_name == "feature/new-mesh"
+        assert b.source_commit_id is None
 
-    def test_with_parent(self):
-        pid = uuid4()
-        b = BranchCreate(name="hotfix", parent_branch_id=pid)
-        assert b.parent_branch_id == pid
+    def test_with_source_commit(self):
+        cid = uuid4()
+        b = BranchCreate(branch_name="hotfix", source_commit_id=cid)
+        assert b.source_commit_id == cid
 
     def test_missing_name_rejected(self):
         with pytest.raises(Exception):
@@ -162,9 +162,9 @@ class TestCommitCreateRequestSchema:
         assert len(c.objects) == 1
         assert c.objects[0].object_name == "Cube"
 
-    def test_missing_branch_id_rejected(self):
-        with pytest.raises(Exception):
-            CommitCreateRequest(commit_message="no branch", objects=[])
+    def test_missing_branch_id_allowed(self):
+        c = CommitCreateRequest(commit_message="no branch", objects=[])
+        assert c.branch_id is None
 
     def test_missing_message_rejected(self):
         with pytest.raises(Exception):

@@ -82,15 +82,14 @@ async def collect_project_s3_paths(db: Any, pid: str) -> list[str]:
 
 
 async def cleanup_project_s3(db: Any, project_id: Any) -> None:
-    """Collect and delete all S3 objects for a project, logging warnings on failure.
+    """Delete all stored objects under a project's prefix in MinIO/S3.
 
     Args:
-        db: An async SQLAlchemy session.
+        db: An async SQLAlchemy session (unused; kept for API compatibility).
         project_id: The project UUID (string or UUID object).
     """
     try:
-        pid = str(project_id)
-        s3_paths = await collect_project_s3_paths(db, pid)
-        delete_s3_objects(s3_paths, project_id)
+        from storage.storage_service import get_storage_service
+        get_storage_service().delete_project_data(project_id)
     except Exception as exc:
         logger.error("S3 cleanup failed for project %s — orphaned objects may remain: %s", project_id, exc, exc_info=True)
