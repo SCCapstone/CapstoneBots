@@ -245,13 +245,20 @@ def _fetch_branches_list(prefs):
 
 
 def _ensure_active_branch(wm, prefs):
-    """Ensure we have a valid active branch set. Defaults to 'main'."""
-    if _get_active_branch_id(wm):
-        return
+    """Ensure we have a valid active branch set for the current project.
+
+    The cached branch_id can be stale across project switches (e.g. the
+    previous project was deleted), so always verify it exists in the
+    current project's branch list before trusting it.
+    """
     branches = _fetch_branches_list(prefs)
-    if branches:
-        main = next((b for b in branches if b.get("branch_name") == "main"), branches[0])
-        _set_active_branch(wm, main["branch_id"], main["branch_name"])
+    if not branches:
+        return
+    cached_id = _get_active_branch_id(wm)
+    if cached_id and any(b.get("branch_id") == cached_id for b in branches):
+        return
+    main = next((b for b in branches if b.get("branch_name") == "main"), branches[0])
+    _set_active_branch(wm, main["branch_id"], main["branch_name"])
 
 def normalize_user_dict(user: dict) -> dict:
     if not isinstance(user, dict):
@@ -592,6 +599,19 @@ class BVCS_OT_CreateProject(bpy.types.Operator):
             proj_id = project.get("project_id") or project.get("id")
             if proj_id:
                 prefs.project_id = str(proj_id)
+                # Mirror SelectProject initialization so the new project is
+                # immediately usable without requiring "Open Existing Project".
+                wm = context.window_manager
+                _refresh_project_blend_file_cache(context, prefs)
+                wm.bvcs_project_file = "NONE"
+                wm["bvcs_last_synced_commit_hash"] = ""
+                if "bvcs_push_conflict" in wm:
+                    del wm["bvcs_push_conflict"]
+                if "bvcs_push_conflict_compare" in wm:
+                    del wm["bvcs_push_conflict_compare"]
+                wm["bvcs_active_branch_id"] = ""
+                wm["bvcs_active_branch_name"] = "main"
+                _ensure_active_branch(wm, prefs)
                 self.report({'INFO'}, f"Project created: {self.project_name}")
                 logger.info(f"Project created: {self.project_name} ({proj_id})")
             else:
