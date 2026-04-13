@@ -61,23 +61,23 @@ class TestCommitHash:
     """Tests for compute_commit_hash."""
 
     def test_same_inputs_same_hash(self):
-        h1 = StorageUtils.compute_commit_hash("p", "b", "a", "msg", "ts")
-        h2 = StorageUtils.compute_commit_hash("p", "b", "a", "msg", "ts")
+        h1 = StorageUtils.compute_commit_hash("p", "a", "msg", "ts")
+        h2 = StorageUtils.compute_commit_hash("p", "a", "msg", "ts")
         assert h1 == h2
 
     def test_different_message_different_hash(self):
-        h1 = StorageUtils.compute_commit_hash("p", "b", "a", "msg1", "ts")
-        h2 = StorageUtils.compute_commit_hash("p", "b", "a", "msg2", "ts")
+        h1 = StorageUtils.compute_commit_hash("p", "a", "msg1", "ts")
+        h2 = StorageUtils.compute_commit_hash("p", "a", "msg2", "ts")
         assert h1 != h2
 
     def test_empty_message(self):
         """Empty commit message still produces a valid hash."""
-        h = StorageUtils.compute_commit_hash("p", "b", "a", "", "ts")
+        h = StorageUtils.compute_commit_hash("p", "a", "", "ts")
         assert len(h) == 64
 
     def test_empty_all_fields(self):
         """All empty strings still produce a valid 64-char hash."""
-        h = StorageUtils.compute_commit_hash("", "", "", "", "")
+        h = StorageUtils.compute_commit_hash("", "", "", "")
         assert len(h) == 64
 
 
