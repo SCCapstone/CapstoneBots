@@ -568,15 +568,6 @@ function TeamSection() {
               {m.initials}
             </div>
             <h3 className="mt-4 text-sm font-semibold">{m.name}</h3>
-            <a
-              href={m.linkedin}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-3 inline-flex items-center gap-1 text-xs text-sky-600 hover:text-sky-500 dark:text-sky-400"
-            >
-              <LinkedInIcon />
-              LinkedIn
-            </a>
           </div>
         ))}
       </div>
