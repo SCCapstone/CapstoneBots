@@ -35,6 +35,7 @@ export default function Home() {
       <HowItWorks />
       <DashboardSection />
       <DemoSection />
+      <ScreenshotsSection />
       <TeamSection />
       <Footer />
     </main>
@@ -67,6 +68,9 @@ function NavBar({
           </a>
           <a href="#demo" className="hover:text-sky-600 dark:hover:text-sky-400">
             Demo
+          </a>
+          <a href="#screenshots" className="hover:text-sky-600 dark:hover:text-sky-400">
+            Screenshots
           </a>
           <a href="#team" className="hover:text-sky-600 dark:hover:text-sky-400">
             Team
@@ -518,31 +522,107 @@ function DemoSection() {
   );
 }
 
+const SCREENSHOTS = [
+  {
+    src: "/screenshots/projects.png",
+    caption: "Projects dashboard",
+    blurb: "Every project your team is working on, in one place.",
+  },
+  {
+    src: "/screenshots/commits.png",
+    caption: "Commit history",
+    blurb: "Object-level diffs with branch switching.",
+  },
+  {
+    src: "/screenshots/invitations.png",
+    caption: "Member invitations",
+    blurb: "Invite collaborators by email, manage roles per project.",
+  },
+  {
+    src: "/screenshots/panel.png",
+    caption: "Blender add-on panel",
+    blurb: "Commit, pull, and resolve from Blender's sidebar.",
+  },
+];
+
+function ScreenshotsSection() {
+  return (
+    <section
+      id="screenshots"
+      className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28"
+    >
+      <SectionHeader
+        eyebrow="Screenshots"
+        title="A look around the app"
+        subtitle="The web dashboard and the Blender add-on, side by side."
+      />
+
+      <div className="mt-14 grid grid-cols-1 gap-6 md:grid-cols-2">
+        {SCREENSHOTS.map((s) => (
+          <figure
+            key={s.src}
+            className="group overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:shadow-xl dark:border-slate-800 dark:bg-slate-900/50"
+          >
+            <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-red-500/70" />
+                <span className="h-2 w-2 rounded-full bg-yellow-500/70" />
+                <span className="h-2 w-2 rounded-full bg-green-500/70" />
+              </div>
+              <div className="ml-2 truncate text-[10px] text-slate-500">
+                {s.caption}
+              </div>
+            </div>
+
+            <div className="relative aspect-video w-full bg-slate-100 dark:bg-slate-900">
+              <img
+                src={s.src}
+                alt={s.caption}
+                className="absolute inset-0 h-full w-full object-cover"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                }}
+              />
+            </div>
+
+            <figcaption className="px-4 py-3 text-xs text-slate-600 dark:text-slate-400">
+              <span className="font-semibold text-slate-800 dark:text-slate-200">
+                {s.caption}.
+              </span>{" "}
+              {s.blurb}
+            </figcaption>
+          </figure>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 const TEAM = [
   {
     name: "Aarsh Patel",
     initials: "AP",
-    linkedin: "https://www.linkedin.com/",
+    linkedin: "https://www.linkedin.com/in/aarsh-r-patel/",
   },
   {
     name: "Alex Mesa",
     initials: "AM",
-    linkedin: "https://www.linkedin.com/",
+    linkedin: "https://www.linkedin.com/in/alexmcoria/",
   },
   {
     name: "Paksh Patel",
     initials: "PP",
-    linkedin: "https://www.linkedin.com/",
+    linkedin: "https://www.linkedin.com/in/paksh-patel/",
   },
   {
     name: "Joseph Vann",
     initials: "JV",
-    linkedin: "https://www.linkedin.com/",
+    linkedin: "https://www.linkedin.com/in/joseph-vann-a40886311/",
   },
   {
     name: "Vraj Patel",
     initials: "VP",
-    linkedin: "https://www.linkedin.com/",
+    linkedin: "https://www.linkedin.com/in/vrajtpatel/",
   },
 ];
 
@@ -568,6 +648,15 @@ function TeamSection() {
               {m.initials}
             </div>
             <h3 className="mt-4 text-sm font-semibold">{m.name}</h3>
+            <a
+              href={m.linkedin}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex items-center gap-1 text-xs text-sky-600 hover:text-sky-500 dark:text-sky-400"
+            >
+              <LinkedInIcon />
+              LinkedIn
+            </a>
           </div>
         ))}
       </div>
@@ -588,6 +677,15 @@ function Footer() {
             </span>
           </div>
           <div className="flex items-center gap-5 text-sm">
+            <a
+              href="https://github.com/SCCapstone/CapstoneBots"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 text-slate-600 hover:text-sky-600 dark:text-slate-300 dark:hover:text-sky-400"
+            >
+              <GitHubIcon />
+              GitHub
+            </a>
             <Link
               href="/login"
               className="text-slate-600 hover:text-sky-600 dark:text-slate-300 dark:hover:text-sky-400"
