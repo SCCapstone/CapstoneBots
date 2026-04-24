@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, text as sa_text
+from sqlalchemy import select, or_, update, text as sa_text
 from sqlalchemy.orm import joinedload
 
 
@@ -782,6 +782,30 @@ async def delete_branch(
     project = await db.get(Project, project_id)
     if branch.branch_name == project.default_branch:
         raise HTTPException(status_code=400, detail="Cannot delete the default branch")
+
+    # Break FK references pointing at this branch before deleting it.
+    # Commits are preserved (docstring promises) but commits.branch_id is
+    # NOT NULL in the DB, so we reassign them to the project's default branch.
+    # They remain queryable there as part of project history.
+    # Child branches keep existing but lose their parent reference
+    # (branches.parent_branch_id is nullable).
+    # Object locks scoped to this branch are deleted — the branch is gone, so
+    # per-branch lock state has no meaning.
+    default_branch = await _get_default_branch(db, project_id)
+    await db.execute(
+        update(Commit)
+        .where(Commit.branch_id == branch.branch_id)
+        .values(branch_id=default_branch.branch_id)
+    )
+    await db.execute(
+        update(Branch)
+        .where(Branch.parent_branch_id == branch.branch_id)
+        .values(parent_branch_id=None)
+    )
+    await db.execute(
+        sa_text("DELETE FROM object_locks WHERE branch_id = :bid"),
+        {"bid": str(branch.branch_id)},
+    )
 
     await db.delete(branch)
     await db.commit()

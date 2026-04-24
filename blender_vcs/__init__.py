@@ -1301,7 +1301,16 @@ class BVCS_OT_CreateBranch(bpy.types.Operator):
 
         # Switch to the new branch
         _set_active_branch(wm, new_branch["branch_id"], new_branch["branch_name"])
-        wm["bvcs_last_synced_commit_hash"] = ""
+        # The new branch's remote HEAD is the source commit (the branching point).
+        # Record that hash as the synced hash so the first local commit on this
+        # branch picks it up as its base. Without this, push would see remote
+        # history on the new branch but no base on the pending commit and bail
+        # with "Push blocked: remote history exists but your commit has no base".
+        try:
+            new_head_hash = _get_latest_remote_commit_hash(prefs)
+        except Exception:
+            new_head_hash = ""
+        wm["bvcs_last_synced_commit_hash"] = new_head_hash
         self.report({'INFO'}, f"Created and switched to branch: {new_branch['branch_name']}")
         return {'FINISHED'}
 
