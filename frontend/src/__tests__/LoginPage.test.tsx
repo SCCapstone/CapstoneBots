@@ -51,6 +51,7 @@ jest.mock("@/lib/authApi", () => ({
 }));
 
 import LoginPage from "@/app/login/page";
+import { ApiError } from "@/lib/authApi";
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -110,8 +111,6 @@ describe("LoginPage", () => {
   });
 
   it("shows resend verification button on EMAIL_NOT_VERIFIED error", async () => {
-    // Import ApiError from the mock
-    const { ApiError } = require("@/lib/authApi");
     mockLoginApi.mockRejectedValueOnce(
       new ApiError("Email not verified", 403, "EMAIL_NOT_VERIFIED")
     );

@@ -75,7 +75,7 @@ describe("fetchProjects", () => {
 
 describe("createProject", () => {
   it("sends POST with project payload", async () => {
-    const created = { project_id: "new-id", name: "My Project", default_branch: "main" };
+    const created = { project_id: "new-id", name: "My Project" };
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => created,
@@ -83,7 +83,7 @@ describe("createProject", () => {
 
     const result = await createProject("token", { name: "My Project", description: "desc" });
     expect(result.project_id).toBe("new-id");
-    expect(result.default_branch).toBe("main");
+    expect(result.name).toBe("My Project");
 
     const [, options] = mockFetch.mock.calls[0];
     expect(options.method).toBe("POST");

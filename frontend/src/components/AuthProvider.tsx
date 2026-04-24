@@ -38,6 +38,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ref lets the scheduled callback call the latest scheduleRefresh without creating a cycle
+  const scheduleRefreshRef = useRef<(t: string) => void>(() => {});
 
   const clearRefreshTimer = useCallback(() => {
     if (refreshTimer.current) {
@@ -72,19 +74,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const newToken: string = data.access_token;
             localStorage.setItem("auth_token", newToken);
             setToken(newToken);
-            scheduleRefresh(newToken);
+            scheduleRefreshRef.current(newToken);
           } else {
             // Token rejected — force logout
             logout();
           }
         } catch {
           // Network error — don't logout, try again in 30s
-          refreshTimer.current = setTimeout(() => scheduleRefresh(currentToken), 30_000);
+          refreshTimer.current = setTimeout(
+            () => scheduleRefreshRef.current(currentToken),
+            30_000,
+          );
         }
       }, delay);
     },
     [clearRefreshTimer, logout],
   );
+
+  useEffect(() => {
+    scheduleRefreshRef.current = scheduleRefresh;
+  }, [scheduleRefresh]);
 
   const login = useCallback(
     (newToken: string) => {
@@ -96,10 +105,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   useEffect(() => {
+    // Rehydrating auth from localStorage is only possible after mount — SSR can't read it.
     const saved = localStorage.getItem("auth_token");
     if (saved) {
       const exp = getTokenExp(saved);
       if (exp && exp * 1000 > Date.now()) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setToken(saved);
         scheduleRefresh(saved);
       } else {

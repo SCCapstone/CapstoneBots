@@ -25,29 +25,29 @@ function makeCommit(overrides: Partial<Commit> = {}): Commit {
 
 describe("CommitItem", () => {
   it("renders commit message", () => {
-    render(<CommitItem commit={makeCommit()} />);
+    render(<CommitItem commit={makeCommit()} projectId="p-1" />);
     expect(screen.getByText("Initial commit")).toBeInTheDocument();
   });
 
   it("renders short hash (first 7 chars)", () => {
-    render(<CommitItem commit={makeCommit({ commit_hash: "abcdef1234567890" })} />);
+    render(<CommitItem commit={makeCommit({ commit_hash: "abcdef1234567890" })} projectId="p-1" />);
     expect(screen.getByText("abcdef1")).toBeInTheDocument();
   });
 
   it("renders (no message) when commit_message is empty", () => {
-    render(<CommitItem commit={makeCommit({ commit_message: "" })} />);
+    render(<CommitItem commit={makeCommit({ commit_message: "" })} projectId="p-1" />);
     expect(screen.getByText("(no message)")).toBeInTheDocument();
   });
 
   it("renders formatted date", () => {
-    render(<CommitItem commit={makeCommit({ committed_at: "2025-12-25T10:30:00Z" })} />);
+    render(<CommitItem commit={makeCommit({ committed_at: "2025-12-25T10:30:00Z" })} projectId="p-1" />);
     // The exact format depends on the locale, just check it contains something date-like
     const container = screen.getByText(/Initial commit/).closest("div")!.parentElement!;
     expect(container.textContent).toContain("2025");
   });
 
   it("renders raw string for invalid date", () => {
-    render(<CommitItem commit={makeCommit({ committed_at: "not-a-date" })} />);
+    render(<CommitItem commit={makeCommit({ committed_at: "not-a-date" })} projectId="p-1" />);
     const container = screen.getByText(/Initial commit/).closest("div")!.parentElement!;
     expect(container.textContent).toContain("not-a-date");
   });

@@ -33,7 +33,6 @@ export default function CommitDetailPage() {
 
   const [commit, setCommit] = useState<Commit | null>(null);
   const [objects, setObjects] = useState<BlenderObject[]>([]);
-  const [parentObjects, setParentObjects] = useState<BlenderObject[]>([]);
   const [diffEntries, setDiffEntries] = useState<ObjectDiffEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -65,16 +64,13 @@ export default function CommitDetailPage() {
               projectId,
               thisCommit.parent_commit_id
             );
-            setParentObjects(parentObjs);
             setDiffEntries(computeObjectDiff(objs, parentObjs));
           } catch {
             // Parent commit objects may not be accessible
-            setParentObjects([]);
             setDiffEntries([]);
           }
         } else {
           // First commit — all objects are "added"
-          setParentObjects([]);
           setDiffEntries(
             objs.map((o) => ({
               object_name: o.object_name,

@@ -33,8 +33,8 @@ export default function InvitationsPage() {
             try {
                 const data = await fetchPendingInvitations(token);
                 setInvitations(data);
-            } catch (err: any) {
-                setError(err?.message || "Failed to load invitations.");
+            } catch (err: unknown) {
+                setError(err instanceof Error ? err.message : "Failed to load invitations.");
             } finally {
                 setLoading(false);
             }
@@ -47,8 +47,8 @@ export default function InvitationsPage() {
         try {
             await acceptInvitation(token, invitationId);
             setInvitations((prev) => prev.filter((i) => i.invitation_id !== invitationId));
-        } catch (err: any) {
-            setError(err?.message || "Failed to accept invitation.");
+        } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : "Failed to accept invitation.");
         } finally {
             setActionLoading(null);
         }
@@ -60,8 +60,8 @@ export default function InvitationsPage() {
         try {
             await declineInvitation(token, invitationId);
             setInvitations((prev) => prev.filter((i) => i.invitation_id !== invitationId));
-        } catch (err: any) {
-            setError(err?.message || "Failed to decline invitation.");
+        } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : "Failed to decline invitation.");
         } finally {
             setActionLoading(null);
         }

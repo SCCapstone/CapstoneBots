@@ -1,19 +1,27 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
 
 type Theme = "light" | "dark";
 
+// Lazy initializer reads the DOM on the client to seed state in a single render,
+// avoiding a cascading setState inside useEffect.
+function getInitialTheme(): Theme {
+  if (typeof document === "undefined") return "dark";
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+}
+
 export default function Home() {
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const [mounted, setMounted] = useState(false);
   const { token, hydrated } = useAuth();
 
+  // Hydration flag — can't be set during render because SSR has no DOM to read
   useEffect(() => {
-    const isDark = document.documentElement.classList.contains("dark");
-    setTheme(isDark ? "dark" : "light");
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
   }, []);
 
@@ -575,12 +583,14 @@ function ScreenshotsSection() {
             </div>
 
             <div className="relative aspect-video w-full bg-slate-100 dark:bg-slate-900">
-              <img
+              <Image
                 src={s.src}
                 alt={s.caption}
-                className="absolute inset-0 h-full w-full object-cover"
+                fill
+                sizes="(min-width: 768px) 50vw, 100vw"
+                className="object-cover"
                 onError={(e) => {
-                  e.currentTarget.style.display = "none";
+                  (e.currentTarget as HTMLImageElement).style.display = "none";
                 }}
               />
             </div>
