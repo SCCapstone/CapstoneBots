@@ -37,77 +37,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-ADDON_VENDOR_DIR = os.path.join(os.path.dirname(__file__), "_vendor")
-if os.path.isdir(ADDON_VENDOR_DIR) and ADDON_VENDOR_DIR not in sys.path:
-    sys.path.insert(0, ADDON_VENDOR_DIR)
-
-HAS_BOTO3 = False
-BOTO3_INSTALL_ATTEMPTED = False
-
-def _try_import_boto3():
-    global boto3, BotoCoreError, ClientError, BotocoreConfig, HAS_BOTO3
-    try:
-        import boto3
-        from botocore.exceptions import BotoCoreError, ClientError
-        from botocore.config import Config as BotocoreConfig
-        HAS_BOTO3 = True
-    except Exception:
-        HAS_BOTO3 = False
-    return HAS_BOTO3
-
-def ensure_boto3_installed():
-    """
-    Ensure boto3 exists in Blender's Python environment.
-    Installs into add-on local _vendor directory to avoid system-wide changes.
-    """
-    global BOTO3_INSTALL_ATTEMPTED
-
-    if _try_import_boto3():
-        return True, None
-
-    if BOTO3_INSTALL_ATTEMPTED:
-        return False, "boto3 is not available and automatic install already failed in this session."
-    BOTO3_INSTALL_ATTEMPTED = True
-
-    try:
-        os.makedirs(ADDON_VENDOR_DIR, exist_ok=True)
-
-        # Ensure pip exists in Blender Python, then install boto3 into _vendor.
-        subprocess.run(
-            [sys.executable, "-m", "ensurepip", "--upgrade"],
-            capture_output=True,
-            text=True,
-            check=False
-        )
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "pip", "install",
-                "--disable-pip-version-check",
-                "--target", ADDON_VENDOR_DIR,
-                "boto3"
-            ],
-            capture_output=True,
-            text=True,
-            check=False
-        )
-        if result.returncode != 0:
-            err = (result.stderr or result.stdout or "").strip()
-            if len(err) > 300:
-                err = err[-300:]
-            return False, f"Automatic boto3 install failed: {err or 'pip returned non-zero exit code'}"
-
-        if ADDON_VENDOR_DIR not in sys.path:
-            sys.path.insert(0, ADDON_VENDOR_DIR)
-        importlib.invalidate_caches()
-        if _try_import_boto3():
-            logger.info("boto3 installed into add-on _vendor successfully.")
-            return True, None
-        return False, "boto3 install completed but import still failed."
-    except Exception as e:
-        return False, f"Automatic boto3 install failed: {e}"
-
-_try_import_boto3()
-
 BL_ID = "blender_vcs"
 
 # ---------------- Logger ----------------
@@ -143,33 +72,6 @@ class BVCSAddonPreferences(bpy.types.AddonPreferences):
         default="",
     )
 
-    # S3 fields
-    s3_access_key: bpy.props.StringProperty(
-        name="S3 Access Key",
-        default="",
-    )
-    s3_secret_key: bpy.props.StringProperty(
-        name="S3 Secret Key",
-        default="",
-        subtype='PASSWORD'
-    )
-    s3_bucket: bpy.props.StringProperty(
-        name="S3 Bucket",
-        default="",
-    )
-    s3_endpoint: bpy.props.StringProperty(
-        name="S3 Endpoint",
-        default="",
-    )
-    s3_region: bpy.props.StringProperty(
-        name="S3 Region",
-        default="us-east-1",
-    )
-    s3_secure: bpy.props.BoolProperty(
-        name="S3 Secure (use https)",
-        default=True,
-    )
-
     def draw(self, context):
         layout = self.layout
         layout.label(text="Server")
@@ -177,17 +79,6 @@ class BVCSAddonPreferences(bpy.types.AddonPreferences):
         layout.prop(self, "frontend_signup_url")
         layout.prop(self, "auth_token")
         layout.prop(self, "project_id")
-
-        layout.separator()
-        layout.label(text="S3 Configuration (auto-fetched on login)")
-        has_s3 = bool(self.s3_access_key and self.s3_secret_key and self.s3_bucket)
-        if has_s3:
-            layout.label(text="✓ S3 credentials configured", icon='CHECKMARK')
-        else:
-            layout.label(text="S3 credentials will be fetched when you log in", icon='INFO')
-        row = layout.row()
-        row.operator("bvcs.test_s3", text="Test S3 Connection")
-        row.operator("bvcs.refresh_s3", text="Refresh S3 Credentials")
 
 # ---------------- Helpers ----------------
 def get_prefs(context):
@@ -283,98 +174,6 @@ def get_logged_in_user(prefs):
         logger.error(f"Failed to fetch logged-in user: {e}")
         return None
 
-def fetch_user_s3_credentials(prefs):
-    """Fetch S3 credentials from backend for the current user and fill in preferences."""
-    if not getattr(prefs, "auth_token", None):
-        logger.warning("Cannot fetch S3 config: not logged in")
-        return
-    headers = {"Authorization": f"Bearer {prefs.auth_token}"}
-    try:
-        resp = requests.get(f"{get_api_base(prefs)}/api/auth/s3-config", headers=headers, timeout=5)
-        resp.raise_for_status()
-        s3_data = resp.json()
-        prefs.s3_access_key = s3_data.get("access_key", "")
-        prefs.s3_secret_key = s3_data.get("secret_key", "")
-        prefs.s3_bucket = s3_data.get("bucket", "")
-        prefs.s3_endpoint = s3_data.get("endpoint", "")
-        prefs.s3_region = s3_data.get("region", "us-east-1")
-        prefs.s3_secure = s3_data.get("secure", True)
-        logger.info("S3 credentials fetched from backend successfully")
-    except Exception as e:
-        logger.warning(f"Failed to fetch S3 credentials from backend: {e}")
-
-def make_s3_client(prefs):
-    """
-    Creates a boto3 S3 client using S3 credentials stored in addon preferences.
-    Credentials are fetched from the backend (env vars on the server) at login
-    via the /api/auth/s3-config endpoint.  If they are missing but the user is
-    logged in, this function will attempt to fetch them automatically.
-
-    Returns (client_info, error_msg). If client_info is None, error_msg explains why.
-    """
-    if not HAS_BOTO3:
-        ok, install_err = ensure_boto3_installed()
-        if not ok:
-            return None, install_err
-
-    # If S3 credentials are missing but user is logged in, auto-fetch from backend
-    if not (prefs.s3_access_key and prefs.s3_secret_key and prefs.s3_bucket):
-        if getattr(prefs, "auth_token", None):
-            logger.info("S3 credentials missing in prefs – fetching from backend…")
-            fetch_user_s3_credentials(prefs)
-        else:
-            return None, "Not logged in. Please log in first so S3 credentials can be fetched from the server."
-
-    access_key = prefs.s3_access_key
-    secret_key = prefs.s3_secret_key
-    bucket = prefs.s3_bucket
-    endpoint = prefs.s3_endpoint
-    region = prefs.s3_region or "us-east-1"
-    secure = prefs.s3_secure
-
-    if not access_key or not secret_key or not bucket:
-        return None, (
-            "S3 credentials could not be loaded from the server. "
-            "Make sure S3_ACCESS_KEY, S3_SECRET_KEY and S3_BUCKET are "
-            "configured on the backend."
-        )
-
-    # Normalise endpoint for boto3: must be a full URL or None
-    if endpoint:
-        endpoint = endpoint.strip()
-    if not endpoint:
-        endpoint = None
-    elif not endpoint.startswith("http://") and not endpoint.startswith("https://"):
-        endpoint = ("https://" if secure else "http://") + endpoint
-
-    logger.info(
-        f"Creating S3 client – endpoint={endpoint}, region={region}, "
-        f"bucket={bucket}, secure={secure}"
-    )
-
-    try:
-        session = boto3.session.Session()
-        botocore_conf = BotocoreConfig(signature_version='s3v4')
-        s3_client = session.client(
-            service_name='s3',
-            region_name=region,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            endpoint_url=endpoint,
-            config=botocore_conf
-        )
-    except Exception as e:
-        logger.error(f"Failed to create S3 client: {e}", exc_info=True)
-        return None, f"Failed to create S3 client: {e}"
-
-    return {
-        "client": s3_client,
-        "bucket": bucket,
-        "endpoint": endpoint,
-        "region": region,
-        "secure": secure
-    }, None
-
 def gather_dependencies(blend_file_path):
     """Gather all dependencies of the blend file and copy them to a new folder."""
     base_dir = os.path.dirname(blend_file_path)
@@ -410,40 +209,6 @@ def gather_dependencies(blend_file_path):
             logger.warning(f"Could not copy dependency {dep}: {e}")
 
     return package_dir
-
-def upload_folder_to_s3(folder, bucket, s3_key, client):
-    """Upload a folder to AWS S3 without zipping."""
-    try:
-        for root, dirs, files in os.walk(folder):
-            for file in files:
-                local_file_path = os.path.join(root, file)
-                s3_file_path = os.path.relpath(local_file_path, folder)
-                s3_file_path = os.path.join(s3_key, s3_file_path).replace("\\", "/")
-                client.upload_file(local_file_path, bucket, s3_file_path)
-                logger.info(f"Uploaded {local_file_path} to {s3_file_path} in {bucket}")
-        logger.info(f"Uploaded {folder} to {s3_key} in {bucket}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to upload folder to S3: {e}")
-        return False
-
-def upload_file_to_s3(local_file_path, bucket, s3_key_prefix, client):
-    """
-    Upload a single file to S3.
-    local_file_path: path to the local file
-    bucket: S3 bucket name
-    s3_key_prefix: prefix/folder in the bucket (e.g. 'projectid_timestamp')
-    client: boto3 s3 client
-    """
-    try:
-        filename = os.path.basename(local_file_path)
-        s3_key = os.path.join(s3_key_prefix, filename).replace("\\", "/")
-        client.upload_file(local_file_path, bucket, s3_key)
-        logger.info(f"Uploaded {local_file_path} to s3://{bucket}/{s3_key}")
-        return s3_key  # return S3 key used
-    except Exception as e:
-        logger.error(f"Failed to upload file to S3: {e}")
-        return None
 
 # ---------------- Token Refresh ----------------
 # Refresh interval: 50 minutes (token lifetime defaults to 60 min)
@@ -511,8 +276,6 @@ class BVCS_OT_Login(bpy.types.Operator):
                 wm["bvcs_logged_in"] = True
                 self.report({'INFO'}, "Login successful!")
                 logger.info("Login successful")
-                # fetch S3 credentials for this user automatically
-                fetch_user_s3_credentials(prefs)
                 # Start periodic token refresh
                 _start_token_refresh_timer()
             else:
@@ -533,13 +296,6 @@ class BVCS_OT_Logout(bpy.types.Operator):
         prefs = get_prefs(context)
         prefs.auth_token = ""
         prefs.project_id = ""
-        # Clear S3 credentials – they are fetched fresh from the backend on login
-        prefs.s3_access_key = ""
-        prefs.s3_secret_key = ""
-        prefs.s3_bucket = ""
-        prefs.s3_endpoint = ""
-        prefs.s3_region = "us-east-1"
-        prefs.s3_secure = True
         wm = get_bvcs_login_state()
         wm["bvcs_logged_in"] = False
         self.report({'INFO'}, "Logged out")
@@ -1012,21 +768,52 @@ def _download_project_file_info(prefs, file_info: dict, temp_subdir: str = "bvcs
     if not isinstance(file_info, dict):
         raise RuntimeError("Invalid file info")
     s3_uri = file_info.get("s3_path")
-    bucket, key = _parse_s3_uri(s3_uri)
+    if not isinstance(s3_uri, str) or not s3_uri:
+        raise RuntimeError("Missing S3 path in file info")
 
-    s3_info, err = make_s3_client(prefs)
-    if err:
-        raise RuntimeError(f"S3 error: {err}")
-    client = s3_info["client"]
-
+    # Derive a reasonable local filename from the s3 key (used for temp file name only).
+    try:
+        _, key = _parse_s3_uri(s3_uri)
+    except ValueError:
+        key = s3_uri
     file_name = file_info.get("object_name") or os.path.basename(key)
     if not str(file_name).lower().endswith(".blend"):
         file_name = f"{file_name}.blend"
 
+    # Ask the backend for a short-lived presigned download URL. The backend verifies
+    # project membership and validates the path prefix — clients no longer hold S3 keys.
+    project_id = (file_info.get("project_id") or getattr(prefs, "project_id", "") or "").strip()
+    if not project_id:
+        raise RuntimeError("Project ID is required to download project files")
+
+    api_base = get_api_base(prefs)
+    headers = get_auth_headers(prefs)
+    try:
+        resp = requests.get(
+            f"{api_base}/api/projects/{project_id}/files/download",
+            params={"path": s3_uri},
+            headers=headers,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        url = (resp.json() or {}).get("url")
+    except Exception as e:
+        raise RuntimeError(f"Failed to get download URL: {e}")
+    if not url:
+        raise RuntimeError("Backend did not return a download URL")
+
     temp_dir = os.path.join(tempfile.gettempdir(), temp_subdir)
     os.makedirs(temp_dir, exist_ok=True)
     local_path = os.path.join(temp_dir, str(file_name))
-    client.download_file(bucket, key, local_path)
+    try:
+        with requests.get(url, stream=True, timeout=120) as dl:
+            dl.raise_for_status()
+            with open(local_path, "wb") as fh:
+                for chunk in dl.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        fh.write(chunk)
+    except Exception as e:
+        raise RuntimeError(f"Failed to download blend file: {e}")
     return local_path
 
 
@@ -1362,51 +1149,6 @@ class BVCS_OT_Commit(bpy.types.Operator):
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
-
-# ---------------- S3 Test / Refresh ----------------
-class BVCS_OT_TestS3(bpy.types.Operator):
-    bl_idname = "bvcs.test_s3"
-    bl_label = "Test S3 Connection"
-
-    def execute(self, context):
-        prefs = get_prefs(context)
-        s3_info, err = make_s3_client(prefs)
-        if err:
-            self.report({'ERROR'}, f"S3 error: {err}")
-            logger.error(f"S3 test failed: {err}")
-            return {'CANCELLED'}
-        client = s3_info["client"]
-        bucket = s3_info["bucket"]
-        try:
-            client.head_bucket(Bucket=bucket)
-            self.report({'INFO'}, "S3 connection OK")
-            logger.info("S3 connection OK")
-        except Exception as e:
-            self.report({'ERROR'}, f"S3 connection failed: {e}")
-            logger.error(f"S3 connection failed: {e}")
-            return {'CANCELLED'}
-        return {'FINISHED'}
-
-class BVCS_OT_RefreshS3(bpy.types.Operator):
-    bl_idname = "bvcs.refresh_s3"
-    bl_label = "Refresh S3 Credentials"
-
-    def execute(self, context):
-        prefs = get_prefs(context)
-        if not prefs.auth_token:
-            self.report({'ERROR'}, "Not logged in")
-            return {'CANCELLED'}
-        fetch_user_s3_credentials(prefs)
-
-        # Force Blender preferences UI to refresh so new values are visible
-        try:
-            context.preferences.is_dirty = True
-        except Exception:
-            # non-fatal; just continue
-            pass
-
-        self.report({'INFO'}, "S3 credentials refreshed")
-        return {'FINISHED'}
 
 # ---------------- Branch Operators ----------------
 
@@ -3214,10 +2956,6 @@ class BVCS_PT_Panel(bpy.types.Panel):
 
             layout.operator("bvcs.check_conflicts")
 
-            layout.separator()
-            layout.label(text="S3 Config:")
-            layout.prop(prefs, "s3_bucket", text="Bucket")
-
             # Show pending commit (waiting to be pushed)
             wm = context.window_manager
             if "bvcs_pending_commit" in wm:
@@ -3309,8 +3047,6 @@ classes = [
     BVCS_OT_UnstageObject,
     BVCS_OT_StageDeletion,
     BVCS_OT_Commit,
-    BVCS_OT_TestS3,
-    BVCS_OT_RefreshS3,
     BVCS_OT_SwitchBranch,
     BVCS_OT_CreateBranch,
     BVCS_OT_DeleteBranch,
