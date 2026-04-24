@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams, usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
 import CommitItem from "@/components/CommitItem";
@@ -59,6 +59,10 @@ function groupByDay(commits: Commit[]): Array<{ label: string; items: Commit[] }
 }
 
 export default function CommitsHistoryPage() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const branchFromUrl = searchParams.get("branch");
   const params = useParams<{ projectId: string }>();
   const projectId = params.projectId;
   const { token } = useAuth();
@@ -89,18 +93,32 @@ export default function CommitsHistoryPage() {
     })();
   }, [token, projectId]);
 
-  // Load branches
+  // Load branches. Prefer the branch from the URL (?branch=foo) so the
+  // selection survives reloads and links back from the project page.
   useEffect(() => {
     if (!token || !projectId) return;
     (async () => {
       try {
         const branchList = await fetchBranches(token, projectId);
         setBranches(branchList);
+        const fromUrl = branchFromUrl
+          ? branchList.find((b) => b.branch_name === branchFromUrl)
+          : null;
         const main = branchList.find((b) => b.branch_name === "main") ?? branchList[0] ?? null;
-        setCurrentBranch(main);
+        setCurrentBranch(fromUrl ?? main);
       } catch { }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, projectId]);
+
+  const handleBranchChange = (b: Branch) => {
+    setCurrentBranch(b);
+    const qs = new URLSearchParams(searchParams.toString());
+    if (b.branch_name === "main") qs.delete("branch");
+    else qs.set("branch", b.branch_name);
+    const query = qs.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  };
 
   // Load commits when branch changes
   useEffect(() => {
@@ -124,13 +142,17 @@ export default function CommitsHistoryPage() {
 
   const displayName = loadingProject ? "Loading…" : projectName || "Untitled Project";
   const groups = groupByDay(commits);
+  const projectHref =
+    currentBranch && currentBranch.branch_name !== "main"
+      ? `/projects/${projectId}?branch=${encodeURIComponent(currentBranch.branch_name)}`
+      : `/projects/${projectId}`;
 
   return (
     <div className="relative min-h-screen bg-[#0f172a] px-4 py-12">
       {/* Back Button */}
       <div className="absolute left-4 top-4">
         <Link
-          href={`/projects/${projectId}`}
+          href={projectHref}
           className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-300 transition hover:border-sky-500 hover:text-sky-200"
         >
           ← Back to Project
@@ -143,7 +165,7 @@ export default function CommitsHistoryPage() {
           <div>
             <p className="mb-1 text-xs text-slate-500">
               Projects /{" "}
-              <Link href={`/projects/${projectId}`} className="text-slate-300 hover:text-sky-300">
+              <Link href={projectHref} className="text-slate-300 hover:text-sky-300">
                 {displayName}
               </Link>{" "}
               / <span className="text-slate-300">Commits</span>
@@ -156,7 +178,7 @@ export default function CommitsHistoryPage() {
               projectId={projectId}
               branches={branches}
               currentBranch={currentBranch}
-              onBranchChange={(b) => setCurrentBranch(b)}
+              onBranchChange={handleBranchChange}
               onBranchesUpdated={(updated) => setBranches(updated)}
             />
           )}

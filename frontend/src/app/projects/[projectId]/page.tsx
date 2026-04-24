@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams, usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
 import ObjectTypeIcon from "@/components/ObjectTypeIcon";
@@ -52,6 +52,9 @@ const ROLE_COLORS: Record<string, string> = {
 
 export default function ProjectPage() {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const branchFromUrl = searchParams.get("branch");
   const params = useParams<{ projectId: string }>();
   const projectId = params.projectId;
   const { token } = useAuth();
@@ -114,18 +117,35 @@ export default function ProjectPage() {
     })();
   }, [token]);
 
-  // Load branches on mount
+  // Load branches on mount. Prefer the branch from the URL (?branch=foo) if it
+  // exists, so reloads and back-navigation keep the selection.
   useEffect(() => {
     if (!token || !projectId) return;
     (async () => {
       try {
         const branchList = await fetchBranches(token, projectId);
         setBranches(branchList);
+        const fromUrl = branchFromUrl
+          ? branchList.find((b) => b.branch_name === branchFromUrl)
+          : null;
         const main = branchList.find((b) => b.branch_name === "main") ?? branchList[0] ?? null;
-        setCurrentBranch(main);
+        setCurrentBranch(fromUrl ?? main);
       } catch { }
     })();
+    // Intentionally only on initial load / token change — we don't want to
+    // reset the user's selection every time they toggle the URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, projectId]);
+
+  // Keep the URL in sync when the user picks a different branch.
+  const handleBranchChange = (b: Branch) => {
+    setCurrentBranch(b);
+    const qs = new URLSearchParams(searchParams.toString());
+    if (b.branch_name === "main") qs.delete("branch");
+    else qs.set("branch", b.branch_name);
+    const query = qs.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  };
 
   // Load commits and objects when branch changes
   useEffect(() => {
@@ -297,12 +317,16 @@ export default function ProjectPage() {
                   projectId={projectId}
                   branches={branches}
                   currentBranch={currentBranch}
-                  onBranchChange={(b) => setCurrentBranch(b)}
+                  onBranchChange={handleBranchChange}
                   onBranchesUpdated={(updated) => setBranches(updated)}
                 />
               )}
               <Link
-                href={`/projects/${projectId}/commits`}
+                href={
+                  currentBranch && currentBranch.branch_name !== "main"
+                    ? `/projects/${projectId}/commits?branch=${encodeURIComponent(currentBranch.branch_name)}`
+                    : `/projects/${projectId}/commits`
+                }
                 className="rounded-lg border border-slate-700 px-3 py-1 text-[11px] text-slate-300 transition hover:border-sky-500 hover:text-sky-200"
               >
                 {commitCount} Commits
