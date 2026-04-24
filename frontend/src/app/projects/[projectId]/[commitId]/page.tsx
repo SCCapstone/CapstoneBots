@@ -140,13 +140,13 @@ export default function CommitDetailPage() {
 
   return (
     <div className="min-h-screen bg-[#0f172a] px-4 py-12">
-      {/* Back Button */}
-      <div className="absolute left-4 top-4">
+      {/* Back Buttons */}
+      <div className="absolute left-4 top-4 flex gap-2">
         <Link
-          href={`/projects/${projectId}`}
+          href={`/projects/${projectId}/commits`}
           className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-300 transition hover:border-sky-500 hover:text-sky-200"
         >
-          ← Back to Project
+          ← Back to Commits
         </Link>
       </div>
 

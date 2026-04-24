@@ -4,7 +4,6 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
-import CommitItem from "@/components/CommitItem";
 import ObjectTypeIcon from "@/components/ObjectTypeIcon";
 import BranchSelector from "@/components/BranchSelector";
 import type { Commit, Project, ProjectMember, Invitation, MemberRole, BlenderObject, Branch } from "@/lib/projectsApi";
@@ -63,19 +62,13 @@ export default function ProjectPage() {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
 
-  // Commits overlay state
-  const [showCommits, setShowCommits] = useState(false);
+  // Commits (just the latest commit + count are shown on this page now)
   const [commits, setCommits] = useState<Commit[]>([]);
-  const [commitsLoading, setCommitsLoading] = useState(false);
-  const [commitsError, setCommitsError] = useState("");
   const commitCount = commits.length;
 
   // Objects from latest commit
   const [objects, setObjects] = useState<BlenderObject[]>([]);
   const [objectsLoading, setObjectsLoading] = useState(false);
-
-  // Per-commit object counts (for commit overlay)
-  const [commitObjectCounts, setCommitObjectCounts] = useState<Record<string, number>>({});
 
   // Collaborators panel state
   const [members, setMembers] = useState<ProjectMember[]>([]);
@@ -138,8 +131,6 @@ export default function ProjectPage() {
   useEffect(() => {
     if (!token || !projectId || !currentBranch) return;
     const loadAll = async () => {
-      setCommitsLoading(true);
-      setCommitsError("");
       setObjectsLoading(true);
       try {
         const data = await loadCommitsWithUsers(token, projectId, currentBranch.branch_name);
@@ -148,16 +139,12 @@ export default function ProjectPage() {
           const latest = data[0];
           const objs = await fetchCommitObjects(token, projectId, latest.commit_id);
           setObjects(objs);
-          setCommitObjectCounts((prev) => ({ ...prev, [latest.commit_id]: objs.length }));
         } else {
           setObjects([]);
         }
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Failed to load commits.";
-        setCommitsError(message);
+      } catch {
         setObjects([]);
       } finally {
-        setCommitsLoading(false);
         setObjectsLoading(false);
       }
     };
@@ -232,8 +219,6 @@ export default function ProjectPage() {
       if (data.url) window.open(data.url, "_blank");
     } catch { }
   };
-
-  const handleOpenCommits = () => { if (token) setShowCommits(true); };
 
   const handleSendInvite = async (e: FormEvent) => {
     e.preventDefault();
@@ -316,9 +301,12 @@ export default function ProjectPage() {
                   onBranchesUpdated={(updated) => setBranches(updated)}
                 />
               )}
-              <button type="button" onClick={handleOpenCommits} className="rounded-lg border border-slate-700 px-3 py-1 text-[11px] text-slate-300 transition hover:border-sky-500 hover:text-sky-200">
+              <Link
+                href={`/projects/${projectId}/commits`}
+                className="rounded-lg border border-slate-700 px-3 py-1 text-[11px] text-slate-300 transition hover:border-sky-500 hover:text-sky-200"
+              >
                 {commitCount} Commits
-              </button>
+              </Link>
               <button type="button" onClick={() => setShowConfirm(true)} className="rounded-lg border border-red-500/70 px-3 py-1 text-[11px] text-red-300 transition hover:bg-red-500/10">
                 Delete
               </button>
@@ -562,37 +550,6 @@ export default function ProjectPage() {
                 {deleting ? "Deleting..." : "Delete Project"}
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Commits Overlay */}
-      {showCommits && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60">
-          <div className="w-full max-w-2xl rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-xl">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-white">Commits for {displayName}</h2>
-              <button type="button" onClick={() => { setShowCommits(false); setCommitsError(""); }} className="text-xs text-slate-400 hover:text-slate-100">
-                ✕
-              </button>
-            </div>
-            {commitsLoading && <p className="text-xs text-slate-400">Loading commits...</p>}
-            {commitsError && <p className="mb-2 text-xs text-red-400">{commitsError}</p>}
-            {!commitsLoading && !commitsError && commits.length === 0 && (
-              <p className="text-xs text-slate-400">No commits yet for this project.</p>
-            )}
-            {!commitsLoading && !commitsError && commits.length > 0 && (
-              <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
-                {commits.map((c) => (
-                  <CommitItem
-                    key={c.commit_id}
-                    commit={c}
-                    projectId={projectId}
-                    objectCount={commitObjectCounts[c.commit_id]}
-                  />
-                ))}
-              </div>
-            )}
           </div>
         </div>
       )}
