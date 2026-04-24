@@ -28,10 +28,13 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }
 
 export default function CommitDetailPage() {
   const params = useParams<{ projectId: string; commitId: string }>();
-  const { projectId, commitId } = params;
+  const { projectId } = params;
+  // The `[commitId]` URL segment is actually a commit hash (GitHub-style URLs).
+  const commitHash = params.commitId;
   const { token } = useAuth();
 
   const [commit, setCommit] = useState<Commit | null>(null);
+  const [parentHash, setParentHash] = useState<string | null>(null);
   const [objects, setObjects] = useState<BlenderObject[]>([]);
   const [diffEntries, setDiffEntries] = useState<ObjectDiffEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,23 +44,29 @@ export default function CommitDetailPage() {
   const [showUnchanged, setShowUnchanged] = useState(false);
 
   useEffect(() => {
-    if (!token || !projectId || !commitId) return;
+    if (!token || !projectId || !commitHash) return;
 
     const load = async () => {
       setLoading(true);
       setError("");
       try {
-        // Fetch commit objects
-        const objs = await fetchCommitObjects(token, projectId, commitId);
-        setObjects(objs);
-
-        // Find the commit metadata from the commits list
+        // Look up the commit by its hash from the commits list. This gives us
+        // the internal UUID needed to call the object-fetch endpoints.
         const allCommits = await fetchCommits(token, projectId);
-        const thisCommit = allCommits.find((c) => c.commit_id === commitId);
+        const thisCommit = allCommits.find((c) => c.commit_hash === commitHash);
         setCommit(thisCommit || null);
 
-        // If there's a parent commit, fetch its objects for diff
-        if (thisCommit?.parent_commit_id) {
+        if (!thisCommit) {
+          setError("Commit not found");
+          return;
+        }
+
+        const objs = await fetchCommitObjects(token, projectId, thisCommit.commit_id);
+        setObjects(objs);
+
+        if (thisCommit.parent_commit_id) {
+          const parent = allCommits.find((c) => c.commit_id === thisCommit.parent_commit_id);
+          setParentHash(parent?.commit_hash ?? null);
           try {
             const parentObjs = await fetchCommitObjects(
               token,
@@ -66,11 +75,10 @@ export default function CommitDetailPage() {
             );
             setDiffEntries(computeObjectDiff(objs, parentObjs));
           } catch {
-            // Parent commit objects may not be accessible
             setDiffEntries([]);
           }
         } else {
-          // First commit — all objects are "added"
+          setParentHash(null);
           setDiffEntries(
             objs.map((o) => ({
               object_name: o.object_name,
@@ -89,7 +97,7 @@ export default function CommitDetailPage() {
     };
 
     load();
-  }, [token, projectId, commitId]);
+  }, [token, projectId, commitHash]);
 
   const handleDownloadJson = async (path: string) => {
     if (!token) return;
@@ -133,7 +141,7 @@ export default function CommitDetailPage() {
     ? diffEntries
     : diffEntries.filter((e) => e.status !== "unchanged");
 
-  const shortHash = commit?.commit_hash?.slice(0, 10) || commitId.slice(0, 10);
+  const shortHash = commit?.commit_hash?.slice(0, 10) || commitHash.slice(0, 10);
   const commitDate = commit?.committed_at
     ? new Date(commit.committed_at).toLocaleString()
     : "";
@@ -173,12 +181,12 @@ export default function CommitDetailPage() {
                       {shortHash}
                     </span>
                     {commitDate && <span>{commitDate}</span>}
-                    {commit?.parent_commit_id && (
+                    {parentHash && (
                       <Link
-                        href={`/projects/${projectId}/${commit.parent_commit_id}`}
+                        href={`/projects/${projectId}/${parentHash}`}
                         className="text-sky-400 transition hover:text-sky-300"
                       >
-                        parent: {commit.parent_commit_id.slice(0, 8)}…
+                        parent: {parentHash.slice(0, 8)}…
                       </Link>
                     )}
                     {commit?.merge_commit && (
