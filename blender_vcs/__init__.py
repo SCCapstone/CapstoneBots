@@ -1311,6 +1311,14 @@ class BVCS_OT_CreateBranch(bpy.types.Operator):
         except Exception:
             new_head_hash = ""
         wm["bvcs_last_synced_commit_hash"] = new_head_hash
+        # Rebase any pending local commit onto the new branch's head. Without
+        # this, a pending commit created on the previous branch would carry a
+        # stale base hash that doesn't match the new branch's remote head,
+        # tripping the same "Push blocked: no base" error at push time.
+        pending = wm.get("bvcs_pending_commit")
+        if isinstance(pending, dict):
+            pending["base_commit_hash"] = new_head_hash
+            wm["bvcs_pending_commit"] = pending
         self.report({'INFO'}, f"Created and switched to branch: {new_branch['branch_name']}")
         return {'FINISHED'}
 
@@ -1394,11 +1402,13 @@ class BVCS_OT_Push(bpy.types.Operator):
             self.report({'ERROR'}, "No project selected")
             return {'CANCELLED'}
 
-        # Get pending commit info
+        # Get pending commit info. If there's nothing local to push, that's
+        # not an error — the branch (and any prior commits) already live on
+        # the remote. Say so cleanly instead of alarming the user.
         pending_commit = wm.get("bvcs_pending_commit")
         if not pending_commit:
-            self.report({'ERROR'}, "No commit to push. Please commit first.")
-            return {'CANCELLED'}
+            self.report({'INFO'}, "Branch is up to date with remote — no local changes to push.")
+            return {'FINISHED'}
 
         # ── Conflict check ──────────────────────────────────────────────
         try:
