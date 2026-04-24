@@ -607,6 +607,15 @@ def _parse_s3_uri(s3_uri: str):
     return path[:first_slash], path[first_slash + 1:]
 
 
+def _validate_presigned_url(url):
+    if not isinstance(url, str) or not url:
+        raise ValueError("Presigned URL is empty")
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(f"Rejected presigned URL with unsupported scheme: {parsed.scheme!r}")
+    return url
+
+
 def _get_latest_remote_blend_file_info(prefs):
     headers = get_auth_headers(prefs)
     api_base = get_api_base(prefs)
@@ -776,8 +785,13 @@ def _download_project_file_info(prefs, file_info: dict, temp_subdir: str = "bvcs
         _, key = _parse_s3_uri(s3_uri)
     except ValueError:
         key = s3_uri
-    file_name = file_info.get("object_name") or os.path.basename(key)
-    if not str(file_name).lower().endswith(".blend"):
+    # Strip any path components the backend might have included — we only want a
+    # bare filename to join with our temp directory.
+    raw_name = file_info.get("object_name") or os.path.basename(key)
+    file_name = os.path.basename(str(raw_name).replace("\\", "/"))
+    if not file_name or file_name in (".", ".."):
+        file_name = "download.blend"
+    if not file_name.lower().endswith(".blend"):
         file_name = f"{file_name}.blend"
 
     # Ask the backend for a short-lived presigned download URL. The backend verifies
@@ -801,18 +815,36 @@ def _download_project_file_info(prefs, file_info: dict, temp_subdir: str = "bvcs
         raise RuntimeError(f"Failed to get download URL: {e}")
     if not url:
         raise RuntimeError("Backend did not return a download URL")
+    try:
+        _validate_presigned_url(url)
+    except ValueError as e:
+        raise RuntimeError(str(e))
 
     temp_dir = os.path.join(tempfile.gettempdir(), temp_subdir)
     os.makedirs(temp_dir, exist_ok=True)
-    local_path = os.path.join(temp_dir, str(file_name))
+    local_path = os.path.join(temp_dir, file_name)
+    # Defense in depth: ensure the resolved path is still inside temp_dir.
+    temp_root = os.path.abspath(temp_dir)
+    if os.path.commonpath([temp_root, os.path.abspath(local_path)]) != temp_root:
+        raise RuntimeError("Refusing to write outside temp directory")
+
+    # Stream to a .part file and atomically rename on success so a failed
+    # download cannot leave a truncated .blend that later gets opened.
+    partial_path = local_path + ".part"
     try:
-        with requests.get(url, stream=True, timeout=120) as dl:
+        with requests.get(url, stream=True, timeout=120, allow_redirects=False) as dl:
             dl.raise_for_status()
-            with open(local_path, "wb") as fh:
+            with open(partial_path, "wb") as fh:
                 for chunk in dl.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         fh.write(chunk)
+        os.replace(partial_path, local_path)
     except Exception as e:
+        try:
+            if os.path.exists(partial_path):
+                os.remove(partial_path)
+        except OSError:
+            pass
         raise RuntimeError(f"Failed to download blend file: {e}")
     return local_path
 
@@ -995,6 +1027,7 @@ def _download_remote_object(prefs, obj_info: dict):
     presigned_url = url_resp.json().get("url")
     if not presigned_url:
         raise RuntimeError(f"No presigned URL for {json_path}")
+    _validate_presigned_url(presigned_url)
 
     json_resp = requests.get(presigned_url, timeout=15)
     json_resp.raise_for_status()
@@ -1013,6 +1046,7 @@ def _download_remote_object(prefs, obj_info: dict):
             mesh_url_resp.raise_for_status()
             mesh_presigned = mesh_url_resp.json().get("url")
             if mesh_presigned:
+                _validate_presigned_url(mesh_presigned)
                 mesh_resp = requests.get(mesh_presigned, timeout=30)
                 mesh_resp.raise_for_status()
                 mesh_binary = mesh_resp.content
@@ -1884,6 +1918,7 @@ class BVCS_OT_PullProject(bpy.types.Operator):
                         url_resp.raise_for_status()
                         presigned_url = url_resp.json().get("url")
                         if presigned_url:
+                            _validate_presigned_url(presigned_url)
                             json_resp = requests.get(presigned_url, timeout=15)
                             json_resp.raise_for_status()
                             obj_metadata = json_resp.json()
@@ -1908,6 +1943,7 @@ class BVCS_OT_PullProject(bpy.types.Operator):
                             mesh_url_resp.raise_for_status()
                             mesh_presigned = mesh_url_resp.json().get("url")
                             if mesh_presigned:
+                                _validate_presigned_url(mesh_presigned)
                                 mesh_resp = requests.get(mesh_presigned, timeout=30)
                                 mesh_resp.raise_for_status()
                                 mesh_binaries[name] = mesh_resp.content
@@ -2049,6 +2085,7 @@ class BVCS_OT_LoadProjectFile(bpy.types.Operator):
                     url_resp.raise_for_status()
                     presigned_url = url_resp.json().get("url")
                     if presigned_url:
+                        _validate_presigned_url(presigned_url)
                         data_resp = requests.get(presigned_url, timeout=30)
                         data_resp.raise_for_status()
                         metadata = data_resp.json()
@@ -2066,6 +2103,7 @@ class BVCS_OT_LoadProjectFile(bpy.types.Operator):
                         mesh_url_resp.raise_for_status()
                         mesh_presigned = mesh_url_resp.json().get("url")
                         if mesh_presigned:
+                            _validate_presigned_url(mesh_presigned)
                             mesh_resp = requests.get(mesh_presigned, timeout=30)
                             mesh_resp.raise_for_status()
                             mesh_binaries[name] = mesh_resp.content
