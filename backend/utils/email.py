@@ -16,6 +16,7 @@ import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,31 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "noreply@blendercollab.com")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+
+def _validate_frontend_url(raw: str) -> str:
+    # Tokens in reset/verify links must land on the real frontend. A misconfigured
+    # FRONTEND_URL (trailing `?`, extra path, attacker-controlled host) would cause
+    # the token to be appended to the wrong URL and potentially leak. Fail closed
+    # at import rather than send a broken or malicious link.
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https"):
+        raise RuntimeError(
+            f"FRONTEND_URL must use http or https scheme, got {parsed.scheme!r}"
+        )
+    if not parsed.netloc:
+        raise RuntimeError("FRONTEND_URL is missing a host")
+    if parsed.query or parsed.fragment or parsed.params:
+        raise RuntimeError("FRONTEND_URL must not contain a query string or fragment")
+    if parsed.path not in ("", "/"):
+        raise RuntimeError(
+            f"FRONTEND_URL must not contain a path, got {parsed.path!r}"
+        )
+    # Normalize so downstream f-strings don't double-slash.
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+FRONTEND_URL = _validate_frontend_url(os.getenv("FRONTEND_URL", "http://localhost:3000"))
 
 # Only print token-bearing links to stdout when this is explicitly enabled.
 # Keeps local dev convenient while preventing accidental leaks elsewhere.
