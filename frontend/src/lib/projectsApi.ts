@@ -124,6 +124,8 @@ export interface ObjectDiffEntry {
   parent_blob_hash?: string;
 }
 
+type FastApiDetail = { msg?: string; detail?: string } | string | Record<string, unknown>;
+
 async function handleProjectError(res: Response, context: string) {
   let message = `${context} failed: ${res.status}`;
 
@@ -132,7 +134,12 @@ async function handleProjectError(res: Response, context: string) {
     if (data?.detail) {
       message = Array.isArray(data.detail)
         ? data.detail
-          .map((d: any) => d.msg || d.detail || JSON.stringify(d))
+          .map((d: FastApiDetail) => {
+            if (typeof d === "string") return d;
+            return (d as { msg?: string; detail?: string }).msg
+              ?? (d as { msg?: string; detail?: string }).detail
+              ?? JSON.stringify(d);
+          })
           .join(", ")
         : data.detail;
     }

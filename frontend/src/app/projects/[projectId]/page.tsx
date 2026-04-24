@@ -9,7 +9,6 @@ import ObjectTypeIcon from "@/components/ObjectTypeIcon";
 import BranchSelector from "@/components/BranchSelector";
 import type { Commit, Project, ProjectMember, Invitation, MemberRole, BlenderObject, Branch } from "@/lib/projectsApi";
 import {
-  addProjectMember,
   deleteProject,
   fetchCommits,
   fetchProjects,
@@ -82,7 +81,6 @@ export default function ProjectPage() {
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
-  const [invitationsLoading, setInvitationsLoading] = useState(false);
 
   const [inviteInput, setInviteInput] = useState("");
   const [inviteRole, setInviteRole] = useState<MemberRole>("editor");
@@ -171,7 +169,6 @@ export default function ProjectPage() {
     if (!token || !projectId) return;
     const loadCollaborators = async () => {
       setMembersLoading(true);
-      setInvitationsLoading(true);
       try {
         const m = await fetchProjectMembers(token, projectId);
         setMembers(m);
@@ -183,7 +180,6 @@ export default function ProjectPage() {
         setInvitations(inv.filter((i) => i.status === "pending"));
       } catch { }
       setMembersLoading(false);
-      setInvitationsLoading(false);
     };
     if (currentUserId) loadCollaborators();
   }, [token, projectId, currentUserId]);

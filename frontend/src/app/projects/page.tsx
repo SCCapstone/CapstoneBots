@@ -6,10 +6,10 @@ import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
 import {
   fetchProjects,
-  Project,
   createProject,
-  ProjectCreatePayload,
   fetchPendingInvitations,
+  type Project,
+  type ProjectCreatePayload,
 } from "@/lib/projectsApi";
 
 export default function ProjectsPage() {
@@ -44,8 +44,8 @@ export default function ProjectsPage() {
       try {
         const data = await fetchProjects(token);
         setProjects(data);
-      } catch (err: any) {
-        setError(err?.message || "Failed to load projects.");
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Failed to load projects.");
       } finally {
         setLoading(false);
       }
@@ -93,8 +93,8 @@ export default function ProjectsPage() {
       setNewName("");
       setNewDescription("");
       setShowCreate(false);
-    } catch (err: any) {
-      setCreateError(err?.message || "Failed to create project.");
+    } catch (err: unknown) {
+      setCreateError(err instanceof Error ? err.message : "Failed to create project.");
     } finally {
       setCreating(false);
     }

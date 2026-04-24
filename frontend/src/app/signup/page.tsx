@@ -1,11 +1,10 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import Link from "next/link";
 import { FormEvent, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
-import { signupApi, SignupPayload } from "@/lib/authApi";
+import { signupApi } from "@/lib/authApi";
 
 
 export default function SignupPage() {
@@ -45,8 +44,8 @@ export default function SignupPage() {
       });
 
       setSuccess(true);
-    } catch (err: any) {
-      setError(err?.message || "Failed to create account.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to create account.");
     } finally {
       setLoading(false);
     }
