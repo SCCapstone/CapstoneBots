@@ -169,99 +169,189 @@ docker compose up -d db
 
 ## Testing
 
-The project has comprehensive test suites for both the backend and frontend.
+This project uses:
 
-### Backend Tests (pytest)
+- Backend: pytest (unit + behavioral API tests)
+- Frontend: Jest + React Testing Library (unit + behavioral UI tests)
 
-Backend tests live in `backend/tests/` and use **pytest**. They cover:
+The goal is to run one command before each commit and catch regressions in authentication, project collaboration, and core UI flows.
 
-- **Unit tests** — password hashing, JWT token creation/validation, Pydantic schema validation, storage utility functions (hashing, path parsing, file size formatting), and ORM model helpers (role hierarchy, invitation status)
-- **Behavioral / integration tests** — full API request flows for authentication, registration, project CRUD, email verification, and account deletion (require a running PostgreSQL database; skipped automatically when unavailable)
+### Install / Setup
 
 ```bash
+# Backend
 cd backend
+python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# Run all unit tests (no external services needed)
-pytest tests/ -v --ignore=tests/test_storage.py
-
-# Run only unit tests (fastest, no DB or S3 required)
-pytest tests/test_unit_auth.py tests/test_unit_models.py tests/test_unit_schemas.py tests/test_unit_schemas_extended.py tests/test_unit_storage_utils.py -v
-
-# Run behavioral tests (requires PostgreSQL via Docker)
-docker compose up -d db
-pytest tests/test_behavior_api.py tests/test_behavior_projects_auth.py -v
-
-# Run storage integration tests (requires MinIO)
-docker compose up -d minio
-pytest tests/test_storage.py -v
-```
-
-**Test files:**
-
-| File | Type | Tests | Description |
-|------|------|-------|-------------|
-| `test_unit_auth.py` | Unit | 28 | Password hashing, JWT tokens (access, reset, email verification) |
-| `test_unit_models.py` | Unit | 14 | Role hierarchy, invitation status, member role parsing |
-| `test_unit_schemas.py` | Unit | 4 | Core Pydantic schema validation |
-| `test_unit_schemas_extended.py` | Unit | 36 | Comprehensive schema validation with edge cases |
-| `test_unit_storage_utils.py` | Unit | 40 | Content hashing, path parsing, file size formatting, JSON validation |
-| `test_behavior_api.py` | Behavioral | 23 | API endpoint flows (auth, projects, health check) |
-| `test_behavior_projects_auth.py` | Behavioral | 15 | Project access control and collaboration |
-| `test_auth.py` | Integration | 4 | Auth flows against live DB |
-| `test_delete_account.py` | Integration | 3 | Account deletion with cleanup |
-| `test_storage.py` | Integration | — | S3/MinIO storage operations |
-
-### Frontend Tests (Jest + React Testing Library)
-
-Frontend tests live in `frontend/src/__tests__/` and use **Jest** with **React Testing Library**. They cover:
-
-- **API client tests** — all API functions (login, signup, projects CRUD, invitations) with mocked `fetch`, including error handling and payload validation
-- **UI / behavioral tests** — rendering and user interaction flows for login, signup, and home pages; component tests for commit items and the auth provider
-
-```bash
-cd frontend
+# Frontend
+cd ../frontend
 npm install
 
-# Run all frontend tests
-npm test
-
-# Run in watch mode (re-runs on file changes)
-npm run test:watch
-
-# Run with CI reporter (no colors, exits on failure)
-npm run test:ci
+# Optional for DB-backed behavioral tests
+cd ..
+docker compose up -d db
 ```
 
-**Test files:**
+### Run All Tests (Single Command)
 
-| File | Type | Tests | Description |
-|------|------|-------|-------------|
-| `authApi.test.ts` | Unit | 14 | Login, signup, delete account API functions |
-| `projectsApi.test.ts` | Unit | 11 | Projects, commits, members, invitations API functions |
-| `LoginPage.test.tsx` | Behavioral | 8 | Login form rendering, submission, error display, navigation |
-| `SignupPage.test.tsx` | Behavioral | 8 | Signup form rendering, validation, submission, navigation |
-| `HomePage.test.tsx` | UI | 4 | Landing page content and navigation links |
-| `CommitItem.test.tsx` | UI | 5 | Commit display, hash truncation, date formatting |
-| `AuthProvider.test.tsx` | Behavioral | 4 | Auth context: login, logout, token persistence |
-
-### Running All Tests
+From repo root:
 
 ```bash
-# From project root — run everything (unit tests only, no external services)
-cd backend && source .venv/bin/activate && pytest tests/ -v --ignore=tests/test_storage.py && cd ../frontend && npm test
+./tests/run_all_tests.sh
 ```
 
-### Test Summary
+This runs backend core tests first, then frontend tests.
+Storage integration tests that require MinIO/S3 are intentionally excluded from this command.
 
-| Suite | Framework | Total Tests | External Services Required |
-|-------|-----------|-------------|---------------------------|
-| Backend unit | pytest | 122 | None |
-| Backend behavioral | pytest | 38+ | PostgreSQL |
-| Backend storage | pytest | — | MinIO / S3 |
-| Frontend | Jest + RTL | 54 | None |
-| **Total** | | **180+** | |
+### What This Covers
+
+- Unit tests: pure logic and boundary conditions (empty/invalid input, duplicate states, role checks)
+- Behavioral tests: API and UI flows that mirror real user behavior
+- Regression guard: invitation lifecycle, access control, and auth refresh behavior
+
+### Test Location Pattern
+
+- Backend tests: `backend/tests/test_*.py`
+- Frontend tests: `frontend/tests/**/*.test.ts?(x)` and `frontend/src/__tests__/**/*.test.ts?(x)`
+
+### Helpful Targeted Commands
+
+```bash
+# Backend core only
+cd backend && .venv/bin/python -m pytest tests/ -v --ignore=tests/test_storage.py --ignore=tests/test_object_storage.py
+
+# Frontend only
+cd frontend && npm test
+
+# Newly added milestone tests
+cd backend && .venv/bin/python -m pytest tests/test_unit_project_utils.py tests/test_behavior_invitation_lifecycle.py -v
+cd frontend && npm test -- tests/AuthProvider.behavior.test.tsx --runInBand
+
+# Storage integration tests (requires MinIO/S3 setup)
+cd backend && .venv/bin/python -m pytest tests/test_storage.py tests/test_object_storage.py -v
+```
+
+### Troubleshooting
+
+- If `./tests/run_all_tests.sh` fails immediately:
+	create backend virtualenv and install dependencies using setup commands above.
+- If DB-backed behavioral tests are skipped:
+	start PostgreSQL with `docker compose up -d db`.
+- If storage integration tests fail with connection errors:
+	ensure MinIO/S3 endpoint and credentials are configured, then run those tests separately.
+- If frontend tests fail with missing packages:
+	run `cd frontend && npm install`.
+
+## Video Demonstration Guide
+
+Use this section as your presentation script for the project demo.
+
+### 1. Open With Project Goal (30-45 seconds)
+
+Say:
+
+- Blender Collab is a collaborative version control platform for Blender projects.
+- Instead of managing one large binary file only, we track project changes with commit history, branches, object-level locking, and collaboration roles.
+- The system includes a FastAPI backend, Next.js frontend, Postgres database, and optional S3-compatible storage.
+
+### 2. Architecture Overview (45-60 seconds)
+
+Say:
+
+- The backend handles authentication, project management, collaboration permissions, branching, and commit APIs.
+- The frontend provides the user workflow for login, projects, invitations, and account flows.
+- The data layer stores users, projects, branches, commits, memberships, and invitations.
+- Storage integration is separated so core flows can be tested even when MinIO/S3 is unavailable.
+
+### 3. Core Features To Showcase (2-3 minutes)
+
+Suggested order:
+
+1. Authentication flow:
+- Register, verify, log in, and protected route access.
+
+2. Project and branch workflow:
+- Create project.
+- Show default main branch.
+- Create an additional branch and explain branch history.
+
+3. Commit workflow:
+- Create commits on a branch.
+- Show commit history ordering.
+
+4. Collaboration workflow:
+- Invite a user.
+- Show pending invitations.
+- Accept or decline invitation.
+- Show role-based behavior (owner, editor, viewer).
+
+5. Locking and safety:
+- Show object lock behavior and conflict-prevention logic for concurrent edits.
+
+### 4. Point to the README (30-45 seconds)
+
+Say:
+
+- Everything you need to run the tests yourself is documented in the README.
+- The Testing section lists the exact commands to run all tests, the directories and file patterns where tests are located, and how to run targeted test subsets.
+- If you want to run just the backend tests, just the frontend tests, or just one specific file, the README has the command for each.
+- All setup requirements — virtual environment, npm install, and Docker for the database — are covered there too.
+
+*(scroll through the Testing section of the README on screen)*
+
+### 5. Testing Strategy (1-2 minutes)
+
+Say:
+
+- We intentionally use both unit tests and behavioral tests.
+- Unit tests validate logic and boundary conditions (invalid input, empty values, duplicate states, parsing and utility behavior).
+- Behavioral tests validate realistic API and UI interactions that users actually perform.
+- This gives confidence at both code-level and workflow-level.
+
+### 6. Demonstrate Test Execution Live (45-90 seconds)
+
+From project root, run:
+
+```bash
+./tests/run_all_tests.sh
+```
+
+Explain:
+
+- This is the single pre-commit command for teammates.
+- It runs backend core tests and frontend tests together.
+- Storage integration tests are separate because they require live MinIO/S3 infrastructure.
+
+### 7. Transparency: What Was Improved During Test Hardening (45-60 seconds)
+
+Say:
+
+- While implementing and stabilizing tests, a few backend behaviors were tightened for consistency and backwards compatibility:
+	- Empty project names are rejected.
+	- Branch creation supports both legacy and current payload naming.
+	- Commit history filtering by unknown branch name returns an empty list.
+	- Compatibility conflict endpoints were preserved for legacy clients/tests.
+- These are small contract-level improvements discovered through testing, not a redesign of product features.
+
+### 8. Close With Impact (30-45 seconds)
+
+Say:
+
+- The project now has repeatable, automated quality checks.
+- The team can run one command before every commit.
+- Tests cover both correctness of internal logic and real user behavior.
+- The result is a more reliable collaboration platform and a stronger engineering process.
+
+### 9. Optional Q and A Prep Prompts
+
+Be ready to answer:
+
+- Why separate core tests from storage integration tests?
+- What is the difference between unit and behavioral tests in this project?
+- What regressions were caught by tests during implementation?
+- How does the role model (owner/editor/viewer) map to endpoint authorization?
 
 ## Project Structure
 
