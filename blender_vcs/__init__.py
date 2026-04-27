@@ -257,6 +257,7 @@ def _stop_token_refresh_timer():
 class BVCS_OT_Login(bpy.types.Operator):
     bl_idname = "bvcs.login"
     bl_label = "Login to BVCS"
+    bl_description = "Log in to your BVCS account with email and password"
 
     email: bpy.props.StringProperty(name="Email")
     password: bpy.props.StringProperty(name="Password", subtype='PASSWORD')
@@ -290,6 +291,7 @@ class BVCS_OT_Login(bpy.types.Operator):
 class BVCS_OT_Logout(bpy.types.Operator):
     bl_idname = "bvcs.logout"
     bl_label = "Logout"
+    bl_description = "Log out and clear your saved session token"
 
     def execute(self, context):
         _stop_token_refresh_timer()
@@ -305,6 +307,7 @@ class BVCS_OT_Logout(bpy.types.Operator):
 class BVCS_OT_OpenSignupPage(bpy.types.Operator):
     bl_idname = "bvcs.open_signup"
     bl_label = "Sign Up"
+    bl_description = "Open the BVCS sign-up page in your browser"
 
     def execute(self, context):
         prefs = get_prefs(context)
@@ -330,6 +333,7 @@ class BVCS_OT_OpenSignupPage(bpy.types.Operator):
 class BVCS_OT_CreateProject(bpy.types.Operator):
     bl_idname = "bvcs.create_project"
     bl_label = "Create New Project"
+    bl_description = "Create a new BVCS project on the server"
 
     project_name: bpy.props.StringProperty(name="Project Name")
     project_description: bpy.props.StringProperty(name="Description", default="")
@@ -384,6 +388,7 @@ class BVCS_OT_CreateProject(bpy.types.Operator):
 class BVCS_OT_SelectProject(bpy.types.Operator):
     bl_idname = "bvcs.select_project"
     bl_label = "Open Existing Project"
+    bl_description = "Select and open an existing project from the server"
 
     project_enum: bpy.props.EnumProperty(
         name="Project",
@@ -1060,6 +1065,7 @@ def _download_remote_object(prefs, obj_info: dict):
 class BVCS_OT_StageObjects(bpy.types.Operator):
     bl_idname = "bvcs.stage_objects"
     bl_label = "Stage Selected Objects"
+    bl_description = "Mark the selected objects to be included in the next commit"
 
     def execute(self, context):
         selected_objects = context.selected_objects
@@ -1077,6 +1083,7 @@ class BVCS_OT_StageObjects(bpy.types.Operator):
 class BVCS_OT_StageAll(bpy.types.Operator):
     bl_idname = "bvcs.stage_all"
     bl_label = "Stage All Objects"
+    bl_description = "Mark all objects in the scene to be included in the next commit"
 
     def execute(self, context):
         scene_names = [obj.name for obj in bpy.context.scene.objects]
@@ -1091,6 +1098,7 @@ class BVCS_OT_StageAll(bpy.types.Operator):
 class BVCS_OT_UnstageObject(bpy.types.Operator):
     bl_idname = "bvcs.unstage_object"
     bl_label = "Unstage Selected Objects"
+    bl_description = "Remove the selected objects from the staging area"
 
     def execute(self, context):
         selected_objects = context.selected_objects
@@ -1122,6 +1130,7 @@ class BVCS_OT_StageDeletion(bpy.types.Operator):
 class BVCS_OT_Commit(bpy.types.Operator):
     bl_idname = "bvcs.commit"
     bl_label = "Commit Changes"
+    bl_description = "Save a snapshot of staged objects as a new commit"
 
     commit_message: bpy.props.StringProperty(name="Commit Message", default="Updated objects")
 
@@ -1217,6 +1226,7 @@ def _branch_enum_items(self, context):
 class BVCS_OT_SwitchBranch(bpy.types.Operator):
     bl_idname = "bvcs.switch_branch"
     bl_label = "Switch Branch"
+    bl_description = "Switch the active branch for this project"
 
     branch_enum: bpy.props.EnumProperty(
         name="Branch",
@@ -1255,6 +1265,7 @@ class BVCS_OT_SwitchBranch(bpy.types.Operator):
 class BVCS_OT_CreateBranch(bpy.types.Operator):
     bl_idname = "bvcs.create_branch"
     bl_label = "Create Branch"
+    bl_description = "Create a new branch from the current branch HEAD"
 
     branch_name: bpy.props.StringProperty(
         name="Branch Name",
@@ -1313,6 +1324,7 @@ class BVCS_OT_CreateBranch(bpy.types.Operator):
 class BVCS_OT_DeleteBranch(bpy.types.Operator):
     bl_idname = "bvcs.delete_branch"
     bl_label = "Delete Branch"
+    bl_description = "Delete the selected branch from the project"
 
     branch_enum: bpy.props.EnumProperty(
         name="Branch",
@@ -1376,6 +1388,7 @@ class BVCS_OT_DeleteBranch(bpy.types.Operator):
 class BVCS_OT_Push(bpy.types.Operator):
     bl_idname = "bvcs.push"
     bl_label = "Push to Remote"
+    bl_description = "Upload the current commit to the remote server"
 
     def execute(self, context):
         prefs = get_prefs(context)
@@ -1674,6 +1687,7 @@ class BVCS_OT_Push(bpy.types.Operator):
 class BVCS_OT_PullProject(bpy.types.Operator):
     bl_idname = "bvcs.pull_project"
     bl_label = "Pull Latest from Remote"
+    bl_description = "Download and apply the latest commit from the remote server"
 
     # Set to True when the user confirms a dirty-state merge via the dialog
     _confirmed_dirty_pull: bool = False
@@ -2567,6 +2581,7 @@ bpy.ops.wm.save_as_mainfile(filepath={output_blend!r})
 class BVCS_OT_CheckConflicts(bpy.types.Operator):
     bl_idname = "bvcs.check_conflicts"
     bl_label = "Check Merge Conflicts"
+    bl_description = "Detect and review merge conflicts between local and remote changes"
 
     _cached_conflicts = []
     _cached_conflict_items = []
@@ -2843,6 +2858,7 @@ class BVCS_OT_CheckConflicts(bpy.types.Operator):
 class BVCS_OT_RefreshStatus(bpy.types.Operator):
     bl_idname = "bvcs.refresh_status"
     bl_label = "Refresh Object Status"
+    bl_description = "Refresh the diff status of all scene objects against the last commit"
 
     _cached_diff = {}
 
