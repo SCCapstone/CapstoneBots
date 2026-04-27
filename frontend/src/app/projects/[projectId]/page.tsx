@@ -25,11 +25,10 @@ import {
 } from "@/lib/projectsApi";
 import { downloadGlbFromStoredJson } from "@/lib/downloadGlb";
 import { fetchCurrentUser } from "@/lib/authApi";
+import { formatApiDateTime } from "@/lib/datetime";
 
 function formatCommitDate(dateString: string): string {
-  const date = new Date(dateString);
-  if (isNaN(date.getTime())) return dateString;
-  return date.toLocaleString();
+  return formatApiDateTime(dateString);
 }
 
 async function loadCommitsWithUsers(
@@ -299,11 +298,11 @@ export default function ProjectPage() {
         <div className="min-w-0 flex-1 space-y-5">
           {/* Header + actions */}
           <div className="flex items-center justify-between">
-            <div>
+            <div className="min-w-0 flex-1 pr-4">
               <p className="mb-1 text-xs text-slate-500">
-                Projects / <span className="text-slate-300">{displayName}</span>
+                Projects / <span className="inline-block max-w-full truncate align-bottom text-slate-300" title={displayName}>{displayName}</span>
               </p>
-              <h1 className="text-2xl font-semibold text-white">{displayName}</h1>
+              <h1 className="truncate text-2xl font-semibold text-white" title={displayName}>{displayName}</h1>
             </div>
             <div className="flex items-center gap-2">
               {token && (
@@ -571,7 +570,7 @@ export default function ProjectPage() {
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60">
           <div className="w-full max-w-2xl rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-white">Commits for {displayName}</h2>
+              <h2 className="truncate pr-3 text-sm font-semibold text-white" title={`Commits for ${displayName}`}>Commits for {displayName}</h2>
               <button type="button" onClick={() => { setShowCommits(false); setCommitsError(""); }} className="text-xs text-slate-400 hover:text-slate-100">
                 ✕
               </button>

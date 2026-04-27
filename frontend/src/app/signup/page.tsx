@@ -5,6 +5,7 @@ import { FormEvent, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
 import { signupApi } from "@/lib/authApi";
+import { PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH } from "@/lib/validation";
 
 
 export default function SignupPage() {
@@ -110,6 +111,7 @@ export default function SignupPage() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-sky-500"
+              maxLength={USERNAME_MAX_LENGTH}
               required
             />
           </div>
@@ -138,6 +140,7 @@ export default function SignupPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-sky-500"
+              maxLength={PASSWORD_MAX_LENGTH}
               required
               suppressHydrationWarning
             />
@@ -162,6 +165,7 @@ export default function SignupPage() {
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-sky-500"
+              maxLength={PASSWORD_MAX_LENGTH}
               required
               suppressHydrationWarning
             />

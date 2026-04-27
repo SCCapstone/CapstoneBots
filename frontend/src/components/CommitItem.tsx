@@ -3,6 +3,7 @@
 
 import Link from "next/link";
 import type { Commit } from "@/lib/projectsApi";
+import { formatApiDateTime } from "@/lib/datetime";
 
 type CommitItemProps = {
   commit: Commit;
@@ -11,10 +12,7 @@ type CommitItemProps = {
 };
 
 export default function CommitItem({ commit, projectId, objectCount }: CommitItemProps) {
-  const date = new Date(commit.committed_at);
-  const formatted = isNaN(date.getTime())
-    ? commit.committed_at
-    : date.toLocaleString();
+  const formatted = formatApiDateTime(commit.committed_at);
 
   const shortHash = commit.commit_hash.slice(0, 7);
 
