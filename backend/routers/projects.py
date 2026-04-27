@@ -14,11 +14,12 @@ The API mimics Git workflows adapted for 3D asset collaboration.
 from typing import List, Optional
 from uuid import UUID
 import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, text as sa_text
+from sqlalchemy import select, or_, text as sa_text, update as sa_update, delete as sa_delete
 from sqlalchemy.orm import joinedload
 
 
@@ -47,6 +48,33 @@ router = APIRouter()
 
 
 # ============== Branch Helpers ==============
+
+# Allow letters, digits, dot, dash, underscore. Disallows slashes (URL conflicts),
+# whitespace, control chars, and other punctuation that has caused issues in URLs,
+# query params, and JSON serialization.
+_BRANCH_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+_BRANCH_NAME_MAX_LENGTH = 100
+
+
+def _validate_branch_name(name: Optional[str]) -> str:
+    """Validate and normalize a branch name. Raises HTTPException(400) if invalid."""
+    if name is None:
+        raise HTTPException(status_code=400, detail="Branch name is required")
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Branch name cannot be empty")
+    if len(name) > _BRANCH_NAME_MAX_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Branch name too long (max {_BRANCH_NAME_MAX_LENGTH} characters)",
+        )
+    if not _BRANCH_NAME_PATTERN.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail="Branch name may only contain letters, digits, '.', '_', and '-'",
+        )
+    return name
+
 
 async def _resolve_branch(
     db: AsyncSession,
@@ -683,15 +711,17 @@ async def create_branch(
     """Create a new branch. If source_commit_id is omitted, branches from the default branch HEAD."""
     await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
 
+    branch_name = _validate_branch_name(data.branch_name)
+
     # Check for duplicate name
     existing = await db.execute(
         select(Branch).where(
             Branch.project_id == project_id,
-            Branch.branch_name == data.branch_name,
+            Branch.branch_name == branch_name,
         )
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail=f"Branch '{data.branch_name}' already exists")
+        raise HTTPException(status_code=409, detail=f"Branch '{branch_name}' already exists")
 
     # Determine source commit
     if data.source_commit_id:
@@ -712,7 +742,7 @@ async def create_branch(
 
     new_branch = Branch(
         project_id=project_id,
-        branch_name=data.branch_name,
+        branch_name=branch_name,
         head_commit_id=head_commit_id,
         parent_branch_id=parent_branch_id,
         created_by=current_user.user_id,
@@ -751,17 +781,19 @@ async def update_branch(
     if branch.branch_name == project.default_branch:
         raise HTTPException(status_code=400, detail="Cannot rename the default branch")
 
-    if data.branch_name:
-        # Check for duplicate name
-        existing = await db.execute(
-            select(Branch).where(
-                Branch.project_id == project_id,
-                Branch.branch_name == data.branch_name,
+    if data.branch_name is not None:
+        new_name = _validate_branch_name(data.branch_name)
+        if new_name != branch.branch_name:
+            # Check for duplicate name
+            existing = await db.execute(
+                select(Branch).where(
+                    Branch.project_id == project_id,
+                    Branch.branch_name == new_name,
+                )
             )
-        )
-        if existing.scalar_one_or_none():
-            raise HTTPException(status_code=409, detail=f"Branch '{data.branch_name}' already exists")
-        branch.branch_name = data.branch_name
+            if existing.scalar_one_or_none():
+                raise HTTPException(status_code=409, detail=f"Branch '{new_name}' already exists")
+            branch.branch_name = new_name
 
     await db.commit()
     await db.refresh(branch)
@@ -775,13 +807,43 @@ async def delete_branch(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Delete a branch. Cannot delete the default branch. Commits are NOT deleted."""
+    """Delete a branch. Cannot delete the default branch. Commits are NOT deleted —
+    they are reassigned to the parent branch (or default branch as fallback) so
+    history is preserved.
+    """
     await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
     branch = await _resolve_branch(db, project_id, branch_id=branch_id)
 
     project = await db.get(Project, project_id)
     if branch.branch_name == project.default_branch:
         raise HTTPException(status_code=400, detail="Cannot delete the default branch")
+
+    # Pick a fallback branch for orphaned commits — prefer parent, fall back to default.
+    fallback_branch = None
+    if branch.parent_branch_id and branch.parent_branch_id != branch.branch_id:
+        fallback_branch = await db.get(Branch, branch.parent_branch_id)
+    if fallback_branch is None or fallback_branch.branch_id == branch.branch_id:
+        fallback_branch = await _get_default_branch(db, project_id)
+
+    # Reassign commits from this branch to the fallback so the FK constraint holds
+    # and commit history is preserved.
+    await db.execute(
+        sa_update(Commit)
+        .where(Commit.branch_id == branch.branch_id)
+        .values(branch_id=fallback_branch.branch_id)
+    )
+
+    # Detach child branches: their parent goes away, so set parent_branch_id NULL.
+    await db.execute(
+        sa_update(Branch)
+        .where(Branch.parent_branch_id == branch.branch_id)
+        .values(parent_branch_id=None)
+    )
+
+    # Object locks are scoped to a branch and don't survive its deletion.
+    await db.execute(
+        sa_delete(ObjectLock).where(ObjectLock.branch_id == branch.branch_id)
+    )
 
     await db.delete(branch)
     await db.commit()
