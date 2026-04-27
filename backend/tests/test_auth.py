@@ -1,9 +1,10 @@
 import pytest
 from uuid import uuid4
+from unittest.mock import patch
 
 from conftest import requires_db, verify_email
 from utils import auth
-from utils.auth import create_email_verification_token
+from utils.auth import create_email_verification_token, create_password_reset_token
 
 
 pytestmark = requires_db
@@ -146,3 +147,59 @@ def test_refresh_token_without_auth(client):
     """Refresh without a token should fail."""
     r = client.post("/api/auth/refresh")
     assert r.status_code == 401
+
+
+def test_forgot_password_skips_unverified_user(client):
+    """Unverified accounts must not receive a password-reset email, but the
+    response is still the generic message to prevent user enumeration."""
+    username = f"unv_forgot_{uuid4().hex[:8]}"
+    email = f"unv_forgot_{uuid4().hex[:8]}@example.com"
+    password = "s3cret123"
+
+    r = client.post("/api/auth/register", json={"username": username, "email": email, "password": password})
+    assert r.status_code == 201, r.text
+
+    with patch("routers.users.send_password_reset_email") as mock_send:
+        r = client.post("/api/auth/forgot-password", json={"email": email})
+        assert r.status_code == 200, r.text
+        assert "reset link" in r.json()["message"].lower()
+        mock_send.assert_not_called()
+
+
+def test_reset_password_blocked_for_unverified_user(client):
+    """Even with a valid reset token, an unverified user cannot complete the reset."""
+    username = f"unv_reset_{uuid4().hex[:8]}"
+    email = f"unv_reset_{uuid4().hex[:8]}@example.com"
+    password = "s3cret123"
+
+    r = client.post("/api/auth/register", json={"username": username, "email": email, "password": password})
+    assert r.status_code == 201, r.text
+
+    token = create_password_reset_token(email)
+    r = client.post("/api/auth/reset-password", json={"token": token, "new_password": "newpass123"})
+    assert r.status_code == 403, r.text
+    assert "not verified" in r.json()["detail"].lower()
+
+    # Confirm original password still works after verifying email.
+    verify_email(client, email)
+    r = client.post("/api/auth/login", json={"email": email, "password": password})
+    assert r.status_code == 200, r.text
+
+
+def test_reset_password_succeeds_for_verified_user(client):
+    """Regression: verified users can still complete a password reset."""
+    username = f"ver_reset_{uuid4().hex[:8]}"
+    email = f"ver_reset_{uuid4().hex[:8]}@example.com"
+    password = "s3cret123"
+    new_password = "brandnew456"
+
+    r = client.post("/api/auth/register", json={"username": username, "email": email, "password": password})
+    assert r.status_code == 201, r.text
+    verify_email(client, email)
+
+    token = create_password_reset_token(email)
+    r = client.post("/api/auth/reset-password", json={"token": token, "new_password": new_password})
+    assert r.status_code == 200, r.text
+
+    r = client.post("/api/auth/login", json={"email": email, "password": new_password})
+    assert r.status_code == 200, r.text

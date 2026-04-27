@@ -27,6 +27,7 @@ from models import User, Project, ProjectMember, ProjectInvitation, ObjectLock, 
 import schemas
 from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user, create_password_reset_token, decode_password_reset_token, create_email_verification_token, decode_email_verification_token
 from utils.email import send_password_reset_email, send_verification_email
+from utils.project_utils import delete_project_data
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,7 @@ async def forgot_password(body: schemas.ForgotPasswordRequest, db: AsyncSession 
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalars().first()
 
-    if user:
+    if user and user.is_verified:
         token = create_password_reset_token(user.email)
         try:
             send_password_reset_email(user.email, token)
@@ -292,6 +293,12 @@ async def reset_password(body: schemas.ResetPasswordRequest, db: AsyncSession = 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired reset link.",
+        )
+
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email address is not verified. Please verify your email before resetting your password.",
         )
 
     # Single-use check: reject if token was issued before the last password change
