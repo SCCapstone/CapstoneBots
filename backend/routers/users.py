@@ -27,6 +27,7 @@ from models import User, Project, ProjectMember, ProjectInvitation, ObjectLock, 
 import schemas
 from utils.auth import get_password_hash, verify_password, create_access_token, get_current_user, create_password_reset_token, decode_password_reset_token, create_email_verification_token, decode_email_verification_token
 from utils.email import send_password_reset_email, send_verification_email
+from utils.project_utils import delete_project_data
 
 logger = logging.getLogger(__name__)
 
