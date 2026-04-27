@@ -236,13 +236,13 @@ cd backend && .venv/bin/python -m pytest tests/test_storage.py tests/test_object
 ### Troubleshooting
 
 - If `./tests/run_all_tests.sh` fails immediately:
-	create backend virtualenv and install dependencies using setup commands above.
+  - create backend virtualenv and install dependencies using setup commands above.
 - If DB-backed behavioral tests are skipped:
-	start PostgreSQL with `docker compose up -d db`.
+  - start PostgreSQL with `docker compose up -d db`.
 - If storage integration tests fail with connection errors:
-	ensure MinIO/S3 endpoint and credentials are configured, then run those tests separately.
+  - ensure MinIO/S3 endpoint and credentials are configured, then run those tests separately.
 - If frontend tests fail with missing packages:
-	run `cd frontend && npm install`.
+  - run `cd frontend && npm install`.
 
 ## Project Structure
 
