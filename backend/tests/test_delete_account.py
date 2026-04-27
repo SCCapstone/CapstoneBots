@@ -10,7 +10,7 @@ Tests for the DELETE /api/auth/account endpoint to verify:
 
 import pytest
 
-from conftest import requires_db, register_and_login, auth_header
+from conftest import requires_db, register_and_login, auth_header, create_project
 
 
 pytestmark = requires_db
@@ -60,6 +60,20 @@ def test_delete_account_no_auth(client):
     )
     # Should be 401 or 403 (no Bearer token)
     assert r.status_code in (401, 403)
+
+
+def test_delete_account_with_owned_project(client):
+    """Deleting an account that owns a sole-member project removes the project."""
+    user, token, _, _ = register_and_login(client)
+    project = create_project(client, token)
+
+    r = client.request(
+        "DELETE",
+        "/api/auth/account",
+        json={"password": "testpass123"},
+        headers=auth_header(token),
+    )
+    assert r.status_code == 204, r.text
 
 
 def test_deleted_user_cannot_access_me(client):
