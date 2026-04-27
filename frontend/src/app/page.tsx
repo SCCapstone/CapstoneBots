@@ -30,7 +30,7 @@ export default function Home() {
     document.documentElement.classList.toggle("dark", theme === "dark");
     try {
       localStorage.setItem("theme", theme);
-    } catch {}
+    } catch { }
   }, [theme, mounted]);
 
   const loggedIn = hydrated && !!token;
@@ -45,6 +45,7 @@ export default function Home() {
       <DemoSection />
       <ScreenshotsSection />
       <TeamSection />
+      <DownloadsSection />
       <Footer />
     </main>
   );
@@ -82,6 +83,9 @@ function NavBar({
           </a>
           <a href="#team" className="hover:text-sky-600 dark:hover:text-sky-400">
             Team
+          </a>
+          <a href="#downloads" className="hover:text-sky-600 dark:hover:text-sky-400">
+            Downloads
           </a>
         </nav>
 
@@ -669,6 +673,63 @@ function TeamSection() {
             </a>
           </div>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function DownloadsSection() {
+  return (
+    <section
+      id="downloads"
+      className="border-y border-slate-200 bg-slate-50 py-20 sm:py-28 dark:border-slate-800/80 dark:bg-slate-900/40"
+    >
+      <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <SectionHeader
+          eyebrow="Downloads"
+          title="Get the Blender add-on"
+          subtitle="Install BVCS to start versioning your Blender projects."
+        />
+
+        <div className="mt-14 flex justify-center">
+          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-950/60">
+            <div className="flex items-center gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-500/10">
+                <svg
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-semibold">Blender Collab Add-on</h3>
+                <p className="text-sm text-slate-600 dark:text-slate-400">
+                  Version 1.0 • ZIP file
+                </p>
+              </div>
+              <a
+                href="/blender_vcs.zip"
+                download
+                className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-500"
+              >
+                Download
+              </a>
+            </div>
+            <p className="mt-4 text-sm text-slate-600 dark:text-slate-400">
+              Open Blender → Edit → Preferences → Add-ons → Install → Select
+              the ZIP file.
+            </p>
+          </div>
+        </div>
       </div>
     </section>
   );
