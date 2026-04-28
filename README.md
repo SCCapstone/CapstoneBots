@@ -219,11 +219,23 @@ Storage integration tests that require MinIO/S3 are intentionally excluded from 
 ### Helpful Targeted Commands
 
 ```bash
-# Backend core only
+# Backend — unit tests only
+cd backend && .venv/bin/python -m pytest tests/test_unit_auth.py tests/test_unit_models.py tests/test_unit_schemas.py tests/test_unit_schemas_extended.py tests/test_unit_storage_utils.py -v
+
+# Backend — behavioral tests only
+cd backend && .venv/bin/python -m pytest tests/test_auth.py tests/test_projects.py tests/test_authorization.py tests/test_behavior_api.py tests/test_behavior_projects_auth.py tests/test_delete_account.py -v
+
+# Frontend — unit tests only
+cd frontend && npm test -- --testPathPattern="authApi|projectsApi" --watchAll=false
+
+# Frontend — behavioral tests only
+cd frontend && npm test -- --testPathPattern="AuthProvider|LoginPage|SignupPage|HomePage|CommitItem" --watchAll=false
+
+# Backend — all core tests (unit + behavioral)
 cd backend && .venv/bin/python -m pytest tests/ -v --ignore=tests/test_storage.py --ignore=tests/test_object_storage.py
 
-# Frontend only
-cd frontend && npm test
+# Frontend — all tests
+cd frontend && npm test -- --watchAll=false
 
 # Newly added milestone tests
 cd backend && .venv/bin/python -m pytest tests/test_unit_project_utils.py tests/test_behavior_invitation_lifecycle.py -v
