@@ -241,8 +241,11 @@ cd frontend && npm test -- --watchAll=false
 cd backend && .venv/bin/python -m pytest tests/test_unit_project_utils.py tests/test_behavior_invitation_lifecycle.py -v
 cd frontend && npm test -- tests/AuthProvider.behavior.test.tsx --runInBand
 
-# Storage integration tests (requires MinIO/S3 setup)
-cd backend && .venv/bin/python -m pytest tests/test_storage.py tests/test_object_storage.py -v
+# Storage tests (mock-based, no MinIO/S3 needed)
+cd backend && .venv/bin/python -m pytest tests/test_storage.py -v
+
+# Object storage integration tests (requires live S3 — runs in CI)
+cd backend && .venv/bin/python -m pytest tests/test_object_storage.py -v
 ```
 
 ### Troubleshooting
