@@ -145,8 +145,12 @@ class TestAccessToken:
     def test_decode_tampered_token_raises(self):
         """Altering the payload after signing raises JWTError."""
         token = create_access_token({"sub": "user@example.com"})
-        # flip the last char
-        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        # Tamper with a character in the middle of the signature segment
+        # (last '.' separated part) to reliably invalidate the signature.
+        header, payload, sig = token.rsplit(".", 2)
+        mid = len(sig) // 2
+        tampered_sig = sig[:mid] + ("A" if sig[mid] != "A" else "B") + sig[mid + 1:]
+        tampered = f"{header}.{payload}.{tampered_sig}"
         with pytest.raises(JWTError):
             decode_access_token(tampered)
 

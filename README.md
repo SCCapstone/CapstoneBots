@@ -169,99 +169,95 @@ docker compose up -d db
 
 ## Testing
 
-The project has comprehensive test suites for both the backend and frontend.
+This project uses:
 
-### Backend Tests (pytest)
+- Backend: pytest (unit + behavioral API tests)
+- Frontend: Jest + React Testing Library (unit + behavioral UI tests)
 
-Backend tests live in `backend/tests/` and use **pytest**. They cover:
+The goal is to run one command before each commit and catch regressions in authentication, project collaboration, and core UI flows.
 
-- **Unit tests** — password hashing, JWT token creation/validation, Pydantic schema validation, storage utility functions (hashing, path parsing, file size formatting), and ORM model helpers (role hierarchy, invitation status)
-- **Behavioral / integration tests** — full API request flows for authentication, registration, project CRUD, email verification, and account deletion (require a running PostgreSQL database; skipped automatically when unavailable)
+### Install / Setup
 
 ```bash
+# Backend
 cd backend
+python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# Run all unit tests (no external services needed)
-pytest tests/ -v --ignore=tests/test_storage.py
-
-# Run only unit tests (fastest, no DB or S3 required)
-pytest tests/test_unit_auth.py tests/test_unit_models.py tests/test_unit_schemas.py tests/test_unit_schemas_extended.py tests/test_unit_storage_utils.py -v
-
-# Run behavioral tests (requires PostgreSQL via Docker)
-docker compose up -d db
-pytest tests/test_behavior_api.py tests/test_behavior_projects_auth.py -v
-
-# Run storage integration tests (requires MinIO)
-docker compose up -d minio
-pytest tests/test_storage.py -v
-```
-
-**Test files:**
-
-| File | Type | Tests | Description |
-|------|------|-------|-------------|
-| `test_unit_auth.py` | Unit | 28 | Password hashing, JWT tokens (access, reset, email verification) |
-| `test_unit_models.py` | Unit | 14 | Role hierarchy, invitation status, member role parsing |
-| `test_unit_schemas.py` | Unit | 4 | Core Pydantic schema validation |
-| `test_unit_schemas_extended.py` | Unit | 36 | Comprehensive schema validation with edge cases |
-| `test_unit_storage_utils.py` | Unit | 40 | Content hashing, path parsing, file size formatting, JSON validation |
-| `test_behavior_api.py` | Behavioral | 23 | API endpoint flows (auth, projects, health check) |
-| `test_behavior_projects_auth.py` | Behavioral | 15 | Project access control and collaboration |
-| `test_auth.py` | Integration | 4 | Auth flows against live DB |
-| `test_delete_account.py` | Integration | 3 | Account deletion with cleanup |
-| `test_storage.py` | Integration | — | S3/MinIO storage operations |
-
-### Frontend Tests (Jest + React Testing Library)
-
-Frontend tests live in `frontend/src/__tests__/` and use **Jest** with **React Testing Library**. They cover:
-
-- **API client tests** — all API functions (login, signup, projects CRUD, invitations) with mocked `fetch`, including error handling and payload validation
-- **UI / behavioral tests** — rendering and user interaction flows for login, signup, and home pages; component tests for commit items and the auth provider
-
-```bash
-cd frontend
+# Frontend
+cd ../frontend
 npm install
 
-# Run all frontend tests
-npm test
-
-# Run in watch mode (re-runs on file changes)
-npm run test:watch
-
-# Run with CI reporter (no colors, exits on failure)
-npm run test:ci
+# Optional for DB-backed behavioral tests
+cd ..
+docker compose up -d db
 ```
 
-**Test files:**
+### Run All Tests (Single Command)
 
-| File | Type | Tests | Description |
-|------|------|-------|-------------|
-| `authApi.test.ts` | Unit | 14 | Login, signup, delete account API functions |
-| `projectsApi.test.ts` | Unit | 11 | Projects, commits, members, invitations API functions |
-| `LoginPage.test.tsx` | Behavioral | 8 | Login form rendering, submission, error display, navigation |
-| `SignupPage.test.tsx` | Behavioral | 8 | Signup form rendering, validation, submission, navigation |
-| `HomePage.test.tsx` | UI | 4 | Landing page content and navigation links |
-| `CommitItem.test.tsx` | UI | 5 | Commit display, hash truncation, date formatting |
-| `AuthProvider.test.tsx` | Behavioral | 4 | Auth context: login, logout, token persistence |
-
-### Running All Tests
+From repo root:
 
 ```bash
-# From project root — run everything (unit tests only, no external services)
-cd backend && source .venv/bin/activate && pytest tests/ -v --ignore=tests/test_storage.py && cd ../frontend && npm test
+./tests/run_all_tests.sh
 ```
 
-### Test Summary
+This runs backend core tests first, then frontend tests.
+Storage integration tests that require MinIO/S3 are intentionally excluded from this command.
 
-| Suite | Framework | Total Tests | External Services Required |
-|-------|-----------|-------------|---------------------------|
-| Backend unit | pytest | 122 | None |
-| Backend behavioral | pytest | 38+ | PostgreSQL |
-| Backend storage | pytest | — | MinIO / S3 |
-| Frontend | Jest + RTL | 54 | None |
-| **Total** | | **180+** | |
+### What This Covers
+
+- Unit tests: pure logic and boundary conditions (empty/invalid input, duplicate states, role checks)
+- Behavioral tests: API and UI flows that mirror real user behavior
+- Regression guard: invitation lifecycle, access control, and auth refresh behavior
+
+### Test Location Pattern
+
+- Backend tests: `backend/tests/test_*.py`
+- Frontend tests: `frontend/tests/**/*.test.ts?(x)` and `frontend/src/__tests__/**/*.test.ts?(x)`
+
+### Helpful Targeted Commands
+
+```bash
+# Backend — unit tests only
+cd backend && .venv/bin/python -m pytest tests/test_unit_auth.py tests/test_unit_models.py tests/test_unit_schemas.py tests/test_unit_schemas_extended.py tests/test_unit_storage_utils.py -v
+
+# Backend — behavioral tests only
+cd backend && .venv/bin/python -m pytest tests/test_auth.py tests/test_projects.py tests/test_authorization.py tests/test_behavior_api.py tests/test_behavior_projects_auth.py tests/test_delete_account.py -v
+
+# Frontend — unit tests only
+cd frontend && npm test -- --testPathPattern="authApi|projectsApi" --watchAll=false
+
+# Frontend — behavioral tests only
+cd frontend && npm test -- --testPathPattern="AuthProvider|LoginPage|SignupPage|HomePage|CommitItem" --watchAll=false
+
+# Backend — all core tests (unit + behavioral)
+cd backend && .venv/bin/python -m pytest tests/ -v --ignore=tests/test_storage.py --ignore=tests/test_object_storage.py
+
+# Frontend — all tests
+cd frontend && npm test -- --watchAll=false
+
+# Newly added milestone tests
+cd backend && .venv/bin/python -m pytest tests/test_unit_project_utils.py tests/test_behavior_invitation_lifecycle.py -v
+cd frontend && npm test -- tests/AuthProvider.behavior.test.tsx --runInBand
+
+# Storage tests (mock-based, no MinIO/S3 needed)
+cd backend && .venv/bin/python -m pytest tests/test_storage.py -v
+
+# Object storage integration tests (requires live S3 — runs in CI)
+cd backend && .venv/bin/python -m pytest tests/test_object_storage.py -v
+```
+
+### Troubleshooting
+
+- If `./tests/run_all_tests.sh` fails immediately:
+  - create backend virtualenv and install dependencies using setup commands above.
+- If DB-backed behavioral tests are skipped:
+  - start PostgreSQL with `docker compose up -d db`.
+- If storage integration tests fail with connection errors:
+  - ensure MinIO/S3 endpoint and credentials are configured, then run those tests separately.
+- If frontend tests fail with missing packages:
+  - run `cd frontend && npm install`.
 
 ## Project Structure
 

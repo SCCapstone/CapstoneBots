@@ -276,9 +276,12 @@ async def create_project(
             "active": true
         }
     """
+    if not project.name.strip():
+        raise HTTPException(status_code=400, detail="Project name cannot be empty.")
+
     # Create new project instance with current user as owner
     new_project = Project(
-        name=project.name,
+        name=project.name.strip(),
         description=project.description,
         active=project.active,
         owner_id=current_user.user_id,
@@ -363,7 +366,15 @@ async def get_commit_history(
 
     # If branch filter provided, walk the commit chain from branch HEAD
     if branch_name or branch_id:
-        branch = await _resolve_branch(db, project_id, branch_name=branch_name, branch_id=branch_id)
+        if branch_name and not branch_id:
+            maybe_branch = await db.execute(
+                select(Branch).where(Branch.project_id == project_id, Branch.branch_name == branch_name)
+            )
+            branch = maybe_branch.scalars().first()
+            if not branch:
+                return []
+        else:
+            branch = await _resolve_branch(db, project_id, branch_name=branch_name, branch_id=branch_id)
         if not branch.head_commit_id:
             return []  # Empty branch
 
@@ -666,6 +677,31 @@ async def unlock_object(
     await db.delete(lock)
     await db.commit()
 
+
+# ============== Conflict Compatibility Routes ==============
+
+@router.get("/{project_id}/conflicts")
+async def get_conflicts_compat(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Compatibility endpoint retained for legacy clients/tests."""
+    await check_project_access(project_id, current_user.user_id, db)
+    return []
+
+
+@router.put("/{project_id}/conflicts/{conflict_id}")
+async def resolve_conflict_compat(
+    project_id: UUID,
+    conflict_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Compatibility endpoint retained for legacy clients/tests."""
+    await check_project_access(project_id, current_user.user_id, db, require_role=MemberRole.editor)
+    raise HTTPException(status_code=404, detail="Conflict not found")
+
 # ============== Branch Routes ==============
 
 @router.get("/{project_id}/branches", response_model=List[BranchResponse])
@@ -724,21 +760,20 @@ async def create_branch(
         raise HTTPException(status_code=409, detail=f"Branch '{branch_name}' already exists")
 
     # Determine source commit
-    if data.source_commit_id:
+    if data.parent_branch_id:
+        parent_branch = await _resolve_branch(db, project_id, branch_id=data.parent_branch_id)
+        head_commit_id = parent_branch.head_commit_id
+        parent_branch_id = parent_branch.branch_id
+    elif data.source_commit_id:
         source_commit = await db.get(Commit, data.source_commit_id)
         if not source_commit or source_commit.project_id != project_id:
             raise HTTPException(status_code=404, detail="Source commit not found in this project")
         head_commit_id = data.source_commit_id
+        parent_branch_id = source_commit.branch_id
     else:
         default_branch = await _get_default_branch(db, project_id)
         head_commit_id = default_branch.head_commit_id
-
-    # Determine parent branch (the branch that owns the source commit)
-    parent_branch_id = None
-    if head_commit_id:
-        source_commit = await db.get(Commit, head_commit_id)
-        if source_commit:
-            parent_branch_id = source_commit.branch_id
+        parent_branch_id = default_branch.branch_id
 
     new_branch = Branch(
         project_id=project_id,

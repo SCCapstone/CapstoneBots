@@ -101,8 +101,16 @@ class CommitResponse(CommitBase):
 
 # ============== Branch Schemas ==============
 class BranchCreate(BaseModel):
-    branch_name: str
+    branch_name: Optional[str] = None
+    name: Optional[str] = None
     source_commit_id: Optional[UUID] = None  # If None, branches from default branch HEAD
+    parent_branch_id: Optional[UUID] = None
+
+    @model_validator(mode="after")
+    def validate_name_present(self):
+        if not self.branch_name and not self.name:
+            raise ValueError("Either 'branch_name' or legacy 'name' must be provided")
+        return self
 
 class BranchResponse(BaseModel):
     branch_id: UUID
