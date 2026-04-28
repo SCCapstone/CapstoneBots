@@ -18,6 +18,7 @@ import {
   computeObjectDiff,
 } from "@/lib/projectsApi";
 import { downloadGlbFromStoredJson } from "@/lib/downloadGlb";
+import { formatApiDateTime } from "@/lib/datetime";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   added: { label: "+", color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/30" },
@@ -143,7 +144,7 @@ export default function CommitDetailPage() {
 
   const shortHash = commit?.commit_hash?.slice(0, 10) || commitHash.slice(0, 10);
   const commitDate = commit?.committed_at
-    ? new Date(commit.committed_at).toLocaleString()
+    ? formatApiDateTime(commit.committed_at)
     : "";
 
   return (

@@ -52,6 +52,14 @@ class TestUserCreateSchema:
         u = UserCreate(username="", email="a@b.com", password="12345678")
         assert u.username == ""
 
+    def test_username_too_long_rejected(self):
+        with pytest.raises(Exception):
+            UserCreate(username="a" * 33, email="alice@example.com", password="secret123")
+
+    def test_password_too_long_rejected(self):
+        with pytest.raises(Exception):
+            UserCreate(username="alice", email="alice@example.com", password="p" * 129)
+
 
 # ============== UserLogin ==============
 
@@ -86,6 +94,10 @@ class TestProjectCreateSchema:
         assert p.description == "test desc"
         assert p.active is False
 
+    def test_description_too_long_rejected(self):
+        with pytest.raises(Exception):
+            ProjectCreate(name="MyProject", description="d" * 501)
+
     def test_missing_name_rejected(self):
         with pytest.raises(Exception):
             ProjectCreate()
@@ -95,10 +107,9 @@ class TestProjectCreateSchema:
         p = ProjectCreate(name="")
         assert p.name == ""
 
-    def test_very_long_name(self):
-        """Long names are allowed at the schema level."""
-        p = ProjectCreate(name="A" * 1000)
-        assert len(p.name) == 1000
+    def test_name_too_long_rejected(self):
+        with pytest.raises(Exception):
+            ProjectCreate(name="A" * 101)
 
 
 # ============== ProjectUpdate ==============
@@ -115,6 +126,14 @@ class TestProjectUpdateSchema:
         u = ProjectUpdate(name="New Name")
         assert u.name == "New Name"
         assert u.description is None
+
+    def test_description_too_long_rejected(self):
+        with pytest.raises(Exception):
+            ProjectUpdate(description="d" * 501)
+
+    def test_name_too_long_rejected(self):
+        with pytest.raises(Exception):
+            ProjectUpdate(name="A" * 101)
 
 
 # ============== BranchCreate ==============
@@ -235,6 +254,10 @@ class TestResetPasswordRequestSchema:
     def test_valid(self):
         r = ResetPasswordRequest(token="some.jwt.token", new_password="newpass123")
         assert r.new_password == "newpass123"
+
+    def test_password_too_long_rejected(self):
+        with pytest.raises(Exception):
+            ResetPasswordRequest(token="some.jwt.token", new_password="p" * 129)
 
 
 # ============== VerifyEmailRequest ==============

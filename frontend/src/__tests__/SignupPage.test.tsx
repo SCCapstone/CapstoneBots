@@ -7,6 +7,7 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH } from "@/lib/validation";
 
 // ============== Mocks ==============
 
@@ -136,5 +137,15 @@ describe("SignupPage", () => {
   it("has a back to home link", () => {
     render(<SignupPage />);
     expect(screen.getByText(/back to home/i)).toBeInTheDocument();
+  });
+
+  it("applies max length attributes to username and password inputs", () => {
+    render(<SignupPage />);
+
+    expect(screen.getByPlaceholderText("Your username")).toHaveAttribute("maxLength", String(USERNAME_MAX_LENGTH));
+
+    const [password, confirm] = screen.getAllByPlaceholderText(/•+/);
+    expect(password).toHaveAttribute("maxLength", String(PASSWORD_MAX_LENGTH));
+    expect(confirm).toHaveAttribute("maxLength", String(PASSWORD_MAX_LENGTH));
   });
 });

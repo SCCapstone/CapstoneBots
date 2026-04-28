@@ -46,6 +46,16 @@ describe("CommitItem", () => {
     expect(container.textContent).toContain("2025");
   });
 
+  it("treats timezone-less commit timestamps as UTC before localizing", () => {
+    const committedAt = "2025-12-25T10:30:00";
+    const expected = new Date("2025-12-25T10:30:00Z").toLocaleString();
+
+    render(<CommitItem commit={makeCommit({ committed_at: committedAt })} projectId="p-1" />);
+
+    const container = screen.getByText(/Initial commit/).closest("div")!.parentElement!;
+    expect(container.textContent).toContain(expected);
+  });
+
   it("renders raw string for invalid date", () => {
     render(<CommitItem commit={makeCommit({ committed_at: "not-a-date" })} projectId="p-1" />);
     const container = screen.getByText(/Initial commit/).closest("div")!.parentElement!;
