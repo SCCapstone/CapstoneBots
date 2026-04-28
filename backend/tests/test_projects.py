@@ -135,7 +135,7 @@ class TestBranches:
         proj = _create_project(client, token)
         r = client.post(
             f"/api/projects/{proj['project_id']}/branches",
-            json={"name": "feature-x"},
+            json={"branch_name": "feature-x"},
             headers=_h(token),
         )
         assert r.status_code == 201
@@ -146,7 +146,7 @@ class TestBranches:
         proj = _create_project(client, token)
         r = client.post(
             f"/api/projects/{proj['project_id']}/branches",
-            json={"name": "  "},
+            json={"branch_name": "  "},
             headers=_h(token),
         )
         assert r.status_code == 400
@@ -156,7 +156,7 @@ class TestBranches:
         proj = _create_project(client, token)
         r = client.post(
             f"/api/projects/{proj['project_id']}/branches",
-            json={"name": "feat/x"},
+            json={"branch_name": "feat/x"},
             headers=_h(token),
         )
         assert r.status_code == 400
@@ -166,10 +166,36 @@ class TestBranches:
         proj = _create_project(client, token)
         r = client.post(
             f"/api/projects/{proj['project_id']}/branches",
-            json={"name": "a" * 256},
+            json={"branch_name": "a" * 256},
             headers=_h(token),
         )
         assert r.status_code == 400
+
+    def test_create_branch_with_special_chars_rejected(self, client):
+        _, token, _, _ = _register_and_login(client)
+        proj = _create_project(client, token)
+        for bad in ["feat!@#", "feat x", "feat$", "f<x", "feat\x00"]:
+            r = client.post(
+                f"/api/projects/{proj['project_id']}/branches",
+                json={"branch_name": bad},
+                headers=_h(token),
+            )
+            assert r.status_code == 400, f"Expected 400 for {bad!r}, got {r.status_code}"
+
+    def test_create_branch_duplicate_name_rejected(self, client):
+        _, token, _, _ = _register_and_login(client)
+        proj = _create_project(client, token)
+        client.post(
+            f"/api/projects/{proj['project_id']}/branches",
+            json={"branch_name": "dup"},
+            headers=_h(token),
+        )
+        r = client.post(
+            f"/api/projects/{proj['project_id']}/branches",
+            json={"branch_name": "dup"},
+            headers=_h(token),
+        )
+        assert r.status_code == 409
 
     def test_list_branches_includes_main(self, client):
         _, token, _, _ = _register_and_login(client)
@@ -179,16 +205,177 @@ class TestBranches:
         names = [b["branch_name"] for b in r.json()]
         assert "main" in names
 
-    def test_create_branch_with_parent(self, client):
+    def test_get_branch_by_id(self, client):
         _, token, _, _ = _register_and_login(client)
         proj = _create_project(client, token)
         main = _get_main_branch(client, token, proj["project_id"])
+        r = client.get(
+            f"/api/projects/{proj['project_id']}/branches/{main['branch_id']}",
+            headers=_h(token),
+        )
+        assert r.status_code == 200
+        assert r.json()["branch_id"] == main["branch_id"]
+
+    def test_rename_branch(self, client):
+        _, token, _, _ = _register_and_login(client)
+        proj = _create_project(client, token)
         r = client.post(
             f"/api/projects/{proj['project_id']}/branches",
-            json={"name": "child", "parent_branch_id": main["branch_id"]},
+            json={"branch_name": "old-name"},
+            headers=_h(token),
+        )
+        bid = r.json()["branch_id"]
+        r = client.put(
+            f"/api/projects/{proj['project_id']}/branches/{bid}",
+            json={"branch_name": "new-name"},
+            headers=_h(token),
+        )
+        assert r.status_code == 200
+        assert r.json()["branch_name"] == "new-name"
+
+    def test_rename_default_branch_rejected(self, client):
+        _, token, _, _ = _register_and_login(client)
+        proj = _create_project(client, token)
+        main = _get_main_branch(client, token, proj["project_id"])
+        r = client.put(
+            f"/api/projects/{proj['project_id']}/branches/{main['branch_id']}",
+            json={"branch_name": "renamed"},
+            headers=_h(token),
+        )
+        assert r.status_code == 400
+
+    def test_rename_branch_invalid_name_rejected(self, client):
+        _, token, _, _ = _register_and_login(client)
+        proj = _create_project(client, token)
+        r = client.post(
+            f"/api/projects/{proj['project_id']}/branches",
+            json={"branch_name": "feat-a"},
+            headers=_h(token),
+        )
+        bid = r.json()["branch_id"]
+        r = client.put(
+            f"/api/projects/{proj['project_id']}/branches/{bid}",
+            json={"branch_name": "bad/name"},
+            headers=_h(token),
+        )
+        assert r.status_code == 400
+
+    def test_delete_default_branch_rejected(self, client):
+        _, token, _, _ = _register_and_login(client)
+        proj = _create_project(client, token)
+        main = _get_main_branch(client, token, proj["project_id"])
+        r = client.delete(
+            f"/api/projects/{proj['project_id']}/branches/{main['branch_id']}",
+            headers=_h(token),
+        )
+        assert r.status_code == 400
+
+    def test_delete_branch_without_commits(self, client):
+        _, token, _, _ = _register_and_login(client)
+        proj = _create_project(client, token)
+        r = client.post(
+            f"/api/projects/{proj['project_id']}/branches",
+            json={"branch_name": "throwaway"},
+            headers=_h(token),
+        )
+        bid = r.json()["branch_id"]
+        r = client.delete(
+            f"/api/projects/{proj['project_id']}/branches/{bid}",
+            headers=_h(token),
+        )
+        assert r.status_code == 204
+
+    def test_delete_branch_with_commits_preserves_history(self, client):
+        """Issue #217: deleting a branch with commits must not 500.
+
+        Commits should be preserved (reassigned to the default branch) so that
+        history remains visible after the branch ref is removed.
+        """
+        _, token, _, _ = _register_and_login(client)
+        proj = _create_project(client, token)
+        pid = proj["project_id"]
+
+        r = client.post(
+            f"/api/projects/{pid}/branches",
+            json={"branch_name": "feature"},
             headers=_h(token),
         )
         assert r.status_code == 201
+        feature = r.json()
+
+        r = _make_commit(client, token, pid, feature["branch_id"], message="on feature")
+        assert r.status_code == 201, r.text
+        commit_id = r.json()["commit_id"]
+
+        r = client.delete(
+            f"/api/projects/{pid}/branches/{feature['branch_id']}",
+            headers=_h(token),
+        )
+        assert r.status_code == 204, f"Expected 204, got {r.status_code}: {r.text}"
+
+        # Branch is gone
+        r = client.get(f"/api/projects/{pid}/branches", headers=_h(token))
+        ids = [b["branch_id"] for b in r.json()]
+        assert feature["branch_id"] not in ids
+
+        # Commit is preserved (reassigned to default branch, not deleted)
+        main = _get_main_branch(client, token, pid)
+        r = client.get(f"/api/projects/{pid}/commits", headers=_h(token))
+        assert r.status_code == 200
+        commits = r.json()
+        match = next((c for c in commits if c["commit_id"] == commit_id), None)
+        assert match is not None, "commit was lost when its branch was deleted"
+        assert match["branch_id"] == main["branch_id"]
+
+    def test_delete_branch_with_child_branch(self, client):
+        """Deleting a branch that is the parent of another branch must not 500.
+
+        Child branches reference the deleted branch via parent_branch_id (a self-FK
+        on branches). Without cleanup, deletion would violate that constraint.
+        """
+        _, token, _, _ = _register_and_login(client)
+        proj = _create_project(client, token)
+        pid = proj["project_id"]
+        main = _get_main_branch(client, token, proj["project_id"])
+
+        # Seed main so we can branch from it
+        _make_commit(client, token, pid, main["branch_id"], message="seed")
+
+        # Create "parent" branch and put a commit on it so it has its own HEAD
+        r = client.post(
+            f"/api/projects/{pid}/branches",
+            json={"branch_name": "parent"},
+            headers=_h(token),
+        )
+        parent = r.json()
+        r = _make_commit(client, token, pid, parent["branch_id"], message="on parent")
+        parent_commit_id = r.json()["commit_id"]
+
+        # Create "child" branch sourced from a commit on "parent" so that
+        # child.parent_branch_id == parent.branch_id
+        r = client.post(
+            f"/api/projects/{pid}/branches",
+            json={"branch_name": "child", "source_commit_id": parent_commit_id},
+            headers=_h(token),
+        )
+        assert r.status_code == 201
+        child = r.json()
+        assert child["parent_branch_id"] == parent["branch_id"]
+
+        # Delete the parent — child must survive without 500
+        r = client.delete(
+            f"/api/projects/{pid}/branches/{parent['branch_id']}",
+            headers=_h(token),
+        )
+        assert r.status_code == 204, f"Expected 204, got {r.status_code}: {r.text}"
+
+        # Child remains, with its parent reference detached (set to NULL)
+        r = client.get(
+            f"/api/projects/{pid}/branches/{child['branch_id']}",
+            headers=_h(token),
+        )
+        assert r.status_code == 200
+        assert r.json()["parent_branch_id"] is None
 
 
 # =====================================================================

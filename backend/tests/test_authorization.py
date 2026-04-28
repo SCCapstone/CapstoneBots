@@ -182,7 +182,7 @@ _NONMEMBER_ENDPOINTS = [
 # Minimal JSON bodies so FastAPI doesn't reject with 422 before auth runs
 _NONMEMBER_BODIES = {
     ("PUT",  "/api/projects/{pid}"): {"name": "x"},
-    ("POST", "/api/projects/{pid}/branches"): {"name": "x"},
+    ("POST", "/api/projects/{pid}/branches"): {"branch_name": "x"},
     ("POST", "/api/projects/{pid}/commits"): {"branch_id": "00000000-0000-0000-0000-000000000000", "commit_message": "x", "objects": [{"object_name": "O", "object_type": "MESH", "json_data_path": "p", "blob_hash": "h"}]},
     ("POST", "/api/projects/{pid}/locks"): {"object_name": "O", "branch_id": "00000000-0000-0000-0000-000000000000", "expires_at": "2099-01-01T00:00:00"},
     ("POST", "/api/projects/{pid}/members"): {"email": "x@example.com", "role": "viewer"},
@@ -211,7 +211,7 @@ class TestViewerForbidden:
     def test_viewer_cannot_create_branch(self, client):
         r = client.post(
             f"/api/projects/{CTX.project_id}/branches",
-            json={"name": "viewer-branch"},
+            json={"branch_name": "viewer-branch"},
             headers=_h(CTX.viewer_token),
         )
         assert r.status_code == 403
@@ -379,7 +379,7 @@ class TestEditorAllowed:
     def test_editor_can_create_branch(self, client):
         r = client.post(
             f"/api/projects/{CTX.project_id}/branches",
-            json={"name": f"editor-branch-{uuid4().hex[:6]}"},
+            json={"branch_name": f"editor-branch-{uuid4().hex[:6]}"},
             headers=_h(CTX.editor_token),
         )
         assert r.status_code == 201
@@ -482,7 +482,7 @@ class TestOwnerAllowed:
     def test_owner_can_create_branch(self, client):
         r = client.post(
             f"/api/projects/{CTX.project_id}/branches",
-            json={"name": f"owner-branch-{uuid4().hex[:6]}"},
+            json={"branch_name": f"owner-branch-{uuid4().hex[:6]}"},
             headers=_h(CTX.owner_token),
         )
         assert r.status_code == 201
@@ -600,7 +600,7 @@ _ACCESS_MATRIX = [
     ("GET",  "/{pid}/conflicts",                None, "viewer"),
     ("GET",  "/{pid}/members",                  None, "viewer"),
     # --- editor+ ---
-    ("POST", "/{pid}/branches",                 lambda: {"name": f"mx-{uuid4().hex[:6]}"}, "editor"),
+    ("POST", "/{pid}/branches",                 lambda: {"branch_name": f"mx-{uuid4().hex[:6]}"}, "editor"),
     # --- owner-only ---
     ("PUT",  "/{pid}",                          lambda: {"description": "matrix"}, "owner"),
 ]
