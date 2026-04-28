@@ -577,37 +577,6 @@ export default function ProjectPage() {
         </div>
       )}
 
-      {/* Commits Overlay */}
-      {showCommits && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60">
-          <div className="w-full max-w-2xl rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-xl">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="truncate pr-3 text-sm font-semibold text-white" title={`Commits for ${displayName}`}>Commits for {displayName}</h2>
-              <button type="button" onClick={() => { setShowCommits(false); setCommitsError(""); }} className="text-xs text-slate-400 hover:text-slate-100">
-                ✕
-              </button>
-            </div>
-            {commitsLoading && <p className="text-xs text-slate-400">Loading commits...</p>}
-            {commitsError && <p className="mb-2 text-xs text-red-400">{commitsError}</p>}
-            {!commitsLoading && !commitsError && commits.length === 0 && (
-              <p className="text-xs text-slate-400">No commits yet for this project.</p>
-            )}
-            {!commitsLoading && !commitsError && commits.length > 0 && (
-              <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
-                {commits.map((c) => (
-                  <CommitItem
-                    key={c.commit_id}
-                    commit={c}
-                    projectId={projectId}
-                    objectCount={commitObjectCounts[c.commit_id]}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
     </div>
   );
 }
