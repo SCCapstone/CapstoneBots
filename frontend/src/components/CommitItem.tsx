@@ -18,7 +18,7 @@ export default function CommitItem({ commit, projectId, objectCount }: CommitIte
 
   return (
     <Link
-      href={`/projects/${projectId}/${commit.commit_id}`}
+      href={`/projects/${projectId}/${commit.commit_hash}`}
       className="group flex items-start justify-between rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs transition hover:border-sky-500/60 hover:bg-slate-900"
     >
       <div className="flex-1 pr-3">
