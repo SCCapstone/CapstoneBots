@@ -14,24 +14,33 @@ raise, signalling to the caller that delivery failed (fail-closed).
 import os
 import logging
 import smtplib
+from dataclasses import dataclass
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from functools import lru_cache
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-SMTP_HOST = os.getenv("SMTP_HOST", "")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "noreply@blendercollab.com")
+SMTP_TIMEOUT = 30
+
+
+@dataclass(frozen=True)
+class EmailConfig:
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_password: str
+    smtp_from: str
+    frontend_url: str
+    debug: bool
 
 
 def _validate_frontend_url(raw: str) -> str:
     # Tokens in reset/verify links must land on the real frontend. A misconfigured
     # FRONTEND_URL (trailing `?`, extra path, attacker-controlled host) would cause
     # the token to be appended to the wrong URL and potentially leak. Fail closed
-    # at import rather than send a broken or malicious link.
+    # rather than send a broken or malicious link.
     parsed = urlparse(raw)
     if parsed.scheme not in ("http", "https"):
         raise RuntimeError(
@@ -45,24 +54,78 @@ def _validate_frontend_url(raw: str) -> str:
         raise RuntimeError(
             f"FRONTEND_URL must not contain a path, got {parsed.path!r}"
         )
-    # Normalize so downstream f-strings don't double-slash.
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-FRONTEND_URL = _validate_frontend_url(os.getenv("FRONTEND_URL", "http://localhost:3000"))
+@lru_cache(maxsize=1)
+def get_email_config() -> EmailConfig:
+    """Read email settings from the environment.
 
-# Only print token-bearing links to stdout when this is explicitly enabled.
-# Keeps local dev convenient while preventing accidental leaks elsewhere.
-EMAIL_DEBUG = os.getenv("EMAIL_DEBUG", "").lower() in ("true", "1", "yes")
+    Cached so repeated sends don't re-read os.environ. Tests that need to
+    override env vars should call ``get_email_config.cache_clear()`` after
+    patching the environment.
+    """
+    smtp_user = os.getenv("SMTP_USER", "")
+    return EmailConfig(
+        smtp_host=os.getenv("SMTP_HOST", ""),
+        smtp_port=int(os.getenv("SMTP_PORT", "587")),
+        smtp_user=smtp_user,
+        smtp_password=os.getenv("SMTP_PASSWORD", ""),
+        smtp_from=os.getenv("SMTP_FROM", smtp_user or "noreply@blendercollab.com"),
+        frontend_url=_validate_frontend_url(os.getenv("FRONTEND_URL", "http://localhost:3000")),
+        debug=os.getenv("EMAIL_DEBUG", "").lower() in ("true", "1", "yes"),
+    )
+
+
+def _send_email(to_email: str, subject: str, text_body: str, html_body: str, *, debug_label: str, debug_link: str) -> None:
+    """Send an email or, when SMTP is unconfigured, log to console in debug mode.
+
+    Fails closed: raises if SMTP is not configured and EMAIL_DEBUG is disabled.
+    """
+    cfg = get_email_config()
+
+    if not cfg.smtp_host:
+        if cfg.debug:
+            print("\n" + "=" * 60)
+            print(f"  {debug_label} (EMAIL_DEBUG mode – SMTP not configured)")
+            print("=" * 60)
+            print(f"  To:   {to_email}")
+            print(f"  Link: {debug_link}")
+            print("=" * 60 + "\n")
+            logger.info("EMAIL_DEBUG – %s link printed to console for %s", debug_label, to_email)
+            return
+
+        logger.error(
+            "SMTP_HOST is not configured and EMAIL_DEBUG is not enabled. "
+            "Cannot send %s email to %s.", debug_label, to_email,
+        )
+        raise RuntimeError("Email delivery is not configured. Set SMTP_HOST or enable EMAIL_DEBUG for local development.")
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = cfg.smtp_from
+    msg["To"] = to_email
+    msg.attach(MIMEText(text_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    try:
+        with smtplib.SMTP(cfg.smtp_host, cfg.smtp_port, timeout=SMTP_TIMEOUT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            if cfg.smtp_user and cfg.smtp_password:
+                server.login(cfg.smtp_user, cfg.smtp_password)
+            server.sendmail(cfg.smtp_from, [to_email], msg.as_string())
+        logger.info("%s email sent to %s", debug_label, to_email)
+    except Exception as e:
+        logger.error("Failed to send %s email to %s: %s", debug_label, to_email, e)
+        raise
 
 
 def send_password_reset_email(to_email: str, reset_token: str) -> None:
-    """
-    Send (or log) a password-reset email containing a one-time link.
-    """
-    reset_link = f"{FRONTEND_URL}/login/reset-password?token={reset_token}"
+    """Send (or log) a password-reset email containing a one-time link."""
+    reset_link = f"{get_email_config().frontend_url}/login/reset-password?token={reset_token}"
 
-    subject = "Blender Collab – Password Reset"
     html_body = f"""\
 <html>
 <body style="font-family:sans-serif;color:#334155;">
@@ -83,54 +146,20 @@ def send_password_reset_email(to_email: str, reset_token: str) -> None:
         "If you didn't request this, you can safely ignore this email.\n"
     )
 
-    # ---------- If SMTP is not configured ----------
-    if not SMTP_HOST:
-        if EMAIL_DEBUG:
-            print("\n" + "=" * 60)
-            print("  PASSWORD RESET (EMAIL_DEBUG mode – SMTP not configured)")
-            print("=" * 60)
-            print(f"  To:   {to_email}")
-            print(f"  Link: {reset_link}")
-            print("=" * 60 + "\n")
-            logger.info("EMAIL_DEBUG – reset link printed to console for %s", to_email)
-            return
-
-        # Fail closed: SMTP is required outside of EMAIL_DEBUG mode.
-        logger.error(
-            "SMTP_HOST is not configured and EMAIL_DEBUG is not enabled. "
-            "Cannot send password-reset email to %s.", to_email,
-        )
-        raise RuntimeError("Email delivery is not configured. Set SMTP_HOST or enable EMAIL_DEBUG for local development.")
-
-    # ---------- Send via SMTP ----------
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = SMTP_FROM
-    msg["To"] = to_email
-    msg.attach(MIMEText(text_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
-
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            if SMTP_USER and SMTP_PASSWORD:
-                server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(SMTP_FROM, [to_email], msg.as_string())
-        logger.info("Password-reset email sent to %s", to_email)
-    except Exception as e:
-        logger.error("Failed to send reset email to %s: %s", to_email, e)
-        raise
+    _send_email(
+        to_email,
+        subject="Blender Collab – Password Reset",
+        text_body=text_body,
+        html_body=html_body,
+        debug_label="PASSWORD RESET",
+        debug_link=reset_link,
+    )
 
 
 def send_verification_email(to_email: str, verification_token: str) -> None:
-    """
-    Send (or log) an email-verification email containing a one-time link.
-    """
-    verify_link = f"{FRONTEND_URL}/verify-email?token={verification_token}"
+    """Send (or log) an email-verification email containing a one-time link."""
+    verify_link = f"{get_email_config().frontend_url}/verify-email?token={verification_token}"
 
-    subject = "Blender Collab – Verify Your Email"
     html_body = f"""\
 <html>
 <body style="font-family:sans-serif;color:#334155;">
@@ -151,44 +180,11 @@ def send_verification_email(to_email: str, verification_token: str) -> None:
         "If you didn't create an account, you can safely ignore this email.\n"
     )
 
-    # ---------- If SMTP is not configured ----------
-    if not SMTP_HOST:
-        if EMAIL_DEBUG:
-            print("\n" + "=" * 60)
-            print("  EMAIL VERIFICATION (EMAIL_DEBUG mode – SMTP not configured)")
-            print("=" * 60)
-            print(f"  To:   {to_email}")
-            print(f"  Link: {verify_link}")
-            print("=" * 60 + "\n")
-            logger.info("EMAIL_DEBUG – verification link printed to console for %s", to_email)
-            return
-
-        # Fail closed: SMTP is required outside of EMAIL_DEBUG mode.
-        logger.error(
-            "SMTP_HOST is not configured and EMAIL_DEBUG is not enabled. "
-            "Cannot send verification email to %s.", to_email,
-        )
-        raise RuntimeError("Email delivery is not configured. Set SMTP_HOST or enable EMAIL_DEBUG for local development.")
-
-    # ---------- Send via SMTP ----------
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = SMTP_FROM
-    msg["To"] = to_email
-    msg.attach(MIMEText(text_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
-
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            if SMTP_USER and SMTP_PASSWORD:
-                server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(SMTP_FROM, [to_email], msg.as_string())
-        logger.info("Verification email sent to %s", to_email)
-    except Exception as e:
-        logger.error("Failed to send verification email to %s: %s", to_email, e)
-        raise
-
-
+    _send_email(
+        to_email,
+        subject="Blender Collab – Verify Your Email",
+        text_body=text_body,
+        html_body=html_body,
+        debug_label="EMAIL VERIFICATION",
+        debug_link=verify_link,
+    )

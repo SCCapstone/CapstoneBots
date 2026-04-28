@@ -7,22 +7,27 @@ import { useAuth } from "@/components/AuthProvider";
 
 type Theme = "light" | "dark";
 
-// Lazy initializer reads the DOM on the client to seed state in a single render,
-// avoiding a cascading setState inside useEffect.
-function getInitialTheme(): Theme {
-  if (typeof document === "undefined") return "dark";
-  return document.documentElement.classList.contains("dark") ? "dark" : "light";
-}
+// SSR has no DOM, and if the client's first render reads the DOM it will
+// diverge from the server's output whenever the user's saved theme is light.
+// Seed with a deterministic default, then sync to the real DOM state in a
+// post-mount effect.
+const DEFAULT_THEME: Theme = "dark";
 
 export default function Home() {
-  const [theme, setTheme] = useState<Theme>(getInitialTheme);
+  const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
   const [mounted, setMounted] = useState(false);
   const { token, hydrated } = useAuth();
 
-  // Hydration flag — can't be set during render because SSR has no DOM to read
+  // Post-hydration: read the real theme the inline script applied to the DOM,
+  // then flip mounted on so theme-dependent UI can render accurately. Syncing
+  // React state from an external source (DOM class set by the pre-hydration
+  // script) is exactly what effects are for here, so the rule is disabled.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    const isDark = document.documentElement.classList.contains("dark");
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setTheme(isDark ? "dark" : "light");
     setMounted(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   useEffect(() => {
