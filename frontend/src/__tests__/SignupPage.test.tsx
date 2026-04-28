@@ -144,7 +144,7 @@ describe("SignupPage", () => {
 
     expect(screen.getByPlaceholderText("Your username")).toHaveAttribute("maxLength", String(USERNAME_MAX_LENGTH));
 
-    const [password, confirm] = screen.getAllByPlaceholderText("â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢");
+    const [password, confirm] = screen.getAllByPlaceholderText(/•+/);
     expect(password).toHaveAttribute("maxLength", String(PASSWORD_MAX_LENGTH));
     expect(confirm).toHaveAttribute("maxLength", String(PASSWORD_MAX_LENGTH));
   });
