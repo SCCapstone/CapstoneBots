@@ -11,6 +11,8 @@ import {
   type Project,
   type ProjectCreatePayload,
 } from "@/lib/projectsApi";
+import { formatApiDateTime } from "@/lib/datetime";
+import { PROJECT_DESCRIPTION_MAX_LENGTH, PROJECT_NAME_MAX_LENGTH } from "@/lib/validation";
 
 export default function ProjectsPage() {
   const router = useRouter();
@@ -178,9 +180,10 @@ export default function ProjectsPage() {
               key={project.project_id}
               href={`/projects/${project.project_id}`}
               className="group rounded-xl border border-slate-800 bg-slate-900/60 p-4 transition hover:border-sky-500/70 hover:bg-slate-900"
+              title={project.name}
             >
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-sm font-semibold text-slate-50 group-hover:text-sky-200">
+              <div className="flex min-w-0 items-center justify-between gap-3">
+                <h2 className="truncate text-sm font-semibold text-slate-50 group-hover:text-sky-200">
                   {project.name}
                 </h2>
               </div>
@@ -194,7 +197,7 @@ export default function ProjectsPage() {
               {project.updated_at && (
                 <p className="mt-3 text-[10px] text-slate-500">
                   Updated:{" "}
-                  {new Date(project.updated_at).toLocaleString()}
+                  {formatApiDateTime(project.updated_at)}
                 </p>
               )}
             </Link>
@@ -235,6 +238,7 @@ export default function ProjectsPage() {
                   onChange={(e) => setNewName(e.target.value)}
                   className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none focus:border-sky-500"
                   placeholder="Blender Environment v1"
+                  maxLength={PROJECT_NAME_MAX_LENGTH}
                   required
                 />
               </div>
@@ -249,6 +253,7 @@ export default function ProjectsPage() {
                   className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none focus:border-sky-500"
                   rows={3}
                   placeholder="Short description of this Blender project..."
+                  maxLength={PROJECT_DESCRIPTION_MAX_LENGTH}
                 />
               </div>
 

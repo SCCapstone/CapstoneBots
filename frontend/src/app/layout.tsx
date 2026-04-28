@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import "./globals.css";
 import { AuthProvider } from "@/components/AuthProvider";
 
@@ -27,9 +26,14 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <Script id="theme-init" strategy="beforeInteractive">
-          {themeInitScript}
-        </Script>
+        {/* Runs before React hydrates to set the `dark` class, avoiding a
+            flash of the wrong theme. A plain <script> tag is required here —
+            next/script's beforeInteractive doesn't work in App Router
+            components, and React-rendered <script> elements don't execute
+            on hydration. */}
+        <script
+          dangerouslySetInnerHTML={{ __html: themeInitScript }}
+        />
       </head>
       <body className="min-h-screen bg-white text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
         <AuthProvider>{children}</AuthProvider>

@@ -1,16 +1,21 @@
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, EmailStr, ConfigDict, model_validator
+from pydantic import BaseModel, EmailStr, ConfigDict, Field
 from datetime import datetime
 from uuid import UUID
 from models import MemberRole
 
+USERNAME_MAX_LENGTH = 32
+PASSWORD_MAX_LENGTH = 128
+PROJECT_NAME_MAX_LENGTH = 100
+PROJECT_DESCRIPTION_MAX_LENGTH = 500
+
 # ============== User Schemas ==============
 class UserBase(BaseModel):
-    username: str
+    username: str = Field(..., max_length=USERNAME_MAX_LENGTH)
     email: EmailStr
 
 class UserCreate(UserBase):
-    password: str
+    password: str = Field(..., max_length=PASSWORD_MAX_LENGTH)
 
 class UserResponse(UserBase):
     user_id: UUID
@@ -40,7 +45,7 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str
-    new_password: str
+    new_password: str = Field(..., max_length=PASSWORD_MAX_LENGTH)
 
 # ============== Email Verification Schemas ==============
 class VerifyEmailRequest(BaseModel):
@@ -51,16 +56,16 @@ class ResendVerificationRequest(BaseModel):
 
 # ============== Project Schemas ==============
 class ProjectBase(BaseModel):
-    name: str
-    description: Optional[str] = None
+    name: str = Field(..., max_length=PROJECT_NAME_MAX_LENGTH)
+    description: Optional[str] = Field(default=None, max_length=PROJECT_DESCRIPTION_MAX_LENGTH)
     active: bool = True
 
 class ProjectCreate(ProjectBase):
     pass
 
 class ProjectUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: Optional[str] = Field(default=None, max_length=PROJECT_NAME_MAX_LENGTH)
+    description: Optional[str] = Field(default=None, max_length=PROJECT_DESCRIPTION_MAX_LENGTH)
     active: Optional[bool] = None
 
 class ProjectResponse(ProjectBase):

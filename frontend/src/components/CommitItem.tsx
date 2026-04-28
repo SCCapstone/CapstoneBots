@@ -3,6 +3,7 @@
 
 import Link from "next/link";
 import type { Commit } from "@/lib/projectsApi";
+import { formatApiDateTime } from "@/lib/datetime";
 
 type CommitItemProps = {
   commit: Commit;
@@ -11,16 +12,13 @@ type CommitItemProps = {
 };
 
 export default function CommitItem({ commit, projectId, objectCount }: CommitItemProps) {
-  const date = new Date(commit.committed_at);
-  const formatted = isNaN(date.getTime())
-    ? commit.committed_at
-    : date.toLocaleString();
+  const formatted = formatApiDateTime(commit.committed_at);
 
   const shortHash = commit.commit_hash.slice(0, 7);
 
   return (
     <Link
-      href={`/projects/${projectId}/${commit.commit_id}`}
+      href={`/projects/${projectId}/${commit.commit_hash}`}
       className="group flex items-start justify-between rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs transition hover:border-sky-500/60 hover:bg-slate-900"
     >
       <div className="flex-1 pr-3">

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
+import { formatApiDate } from "@/lib/datetime";
 import {
     fetchPendingInvitations,
     acceptInvitation,
@@ -65,11 +66,6 @@ export default function InvitationsPage() {
         } finally {
             setActionLoading(null);
         }
-    };
-
-    const formatDate = (d: string) => {
-        const date = new Date(d);
-        return isNaN(date.getTime()) ? d : date.toLocaleDateString();
     };
 
     const ROLE_COLORS: Record<string, string> = {
@@ -148,7 +144,7 @@ export default function InvitationsPage() {
                                                 {inv.role}
                                             </span>
                                             <span className="text-[10px] text-slate-500">
-                                                Expires {formatDate(inv.expires_at)}
+                                                Expires {formatApiDate(inv.expires_at)}
                                             </span>
                                         </div>
                                     </div>

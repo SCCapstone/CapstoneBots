@@ -1,0 +1,4 @@
+export const USERNAME_MAX_LENGTH = 32;
+export const PASSWORD_MAX_LENGTH = 128;
+export const PROJECT_NAME_MAX_LENGTH = 100;
+export const PROJECT_DESCRIPTION_MAX_LENGTH = 500;

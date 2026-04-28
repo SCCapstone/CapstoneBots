@@ -257,6 +257,7 @@ def _stop_token_refresh_timer():
 class BVCS_OT_Login(bpy.types.Operator):
     bl_idname = "bvcs.login"
     bl_label = "Login to BVCS"
+    bl_description = "Log in to your BVCS account with email and password"
 
     email: bpy.props.StringProperty(name="Email")
     password: bpy.props.StringProperty(name="Password", subtype='PASSWORD')
@@ -290,6 +291,7 @@ class BVCS_OT_Login(bpy.types.Operator):
 class BVCS_OT_Logout(bpy.types.Operator):
     bl_idname = "bvcs.logout"
     bl_label = "Logout"
+    bl_description = "Log out and clear your saved session token"
 
     def execute(self, context):
         _stop_token_refresh_timer()
@@ -305,6 +307,7 @@ class BVCS_OT_Logout(bpy.types.Operator):
 class BVCS_OT_OpenSignupPage(bpy.types.Operator):
     bl_idname = "bvcs.open_signup"
     bl_label = "Sign Up"
+    bl_description = "Open the BVCS sign-up page in your browser"
 
     def execute(self, context):
         prefs = get_prefs(context)
@@ -330,6 +333,7 @@ class BVCS_OT_OpenSignupPage(bpy.types.Operator):
 class BVCS_OT_CreateProject(bpy.types.Operator):
     bl_idname = "bvcs.create_project"
     bl_label = "Create New Project"
+    bl_description = "Create a new BVCS project on the server"
 
     project_name: bpy.props.StringProperty(name="Project Name")
     project_description: bpy.props.StringProperty(name="Description", default="")
@@ -384,6 +388,7 @@ class BVCS_OT_CreateProject(bpy.types.Operator):
 class BVCS_OT_SelectProject(bpy.types.Operator):
     bl_idname = "bvcs.select_project"
     bl_label = "Open Existing Project"
+    bl_description = "Select and open an existing project from the server"
 
     project_enum: bpy.props.EnumProperty(
         name="Project",
@@ -474,13 +479,6 @@ def get_api_base(prefs):
 
 def get_auth_headers(prefs):
     return {"Authorization": f"Bearer {prefs.auth_token}"}
-
-
-def _enum_conflict_items(self, context):
-    items = getattr(BVCS_OT_CheckConflicts, "_cached_conflict_items", None)
-    if not items:
-        return [("NONE", "No conflicts", "No conflicts available")]
-    return items
 
 
 PROJECT_BLEND_FILE_ITEMS = [("NONE", "No commits found", "Push objects to this project first")]
@@ -1060,6 +1058,7 @@ def _download_remote_object(prefs, obj_info: dict):
 class BVCS_OT_StageObjects(bpy.types.Operator):
     bl_idname = "bvcs.stage_objects"
     bl_label = "Stage Selected Objects"
+    bl_description = "Mark the selected objects to be included in the next commit"
 
     def execute(self, context):
         selected_objects = context.selected_objects
@@ -1077,6 +1076,7 @@ class BVCS_OT_StageObjects(bpy.types.Operator):
 class BVCS_OT_StageAll(bpy.types.Operator):
     bl_idname = "bvcs.stage_all"
     bl_label = "Stage All Objects"
+    bl_description = "Mark all objects in the scene to be included in the next commit"
 
     def execute(self, context):
         scene_names = [obj.name for obj in bpy.context.scene.objects]
@@ -1091,6 +1091,7 @@ class BVCS_OT_StageAll(bpy.types.Operator):
 class BVCS_OT_UnstageObject(bpy.types.Operator):
     bl_idname = "bvcs.unstage_object"
     bl_label = "Unstage Selected Objects"
+    bl_description = "Remove the selected objects from the staging area"
 
     def execute(self, context):
         selected_objects = context.selected_objects
@@ -1122,6 +1123,7 @@ class BVCS_OT_StageDeletion(bpy.types.Operator):
 class BVCS_OT_Commit(bpy.types.Operator):
     bl_idname = "bvcs.commit"
     bl_label = "Commit Changes"
+    bl_description = "Save a snapshot of staged objects as a new commit"
 
     commit_message: bpy.props.StringProperty(name="Commit Message", default="Updated objects")
 
@@ -1217,6 +1219,7 @@ def _branch_enum_items(self, context):
 class BVCS_OT_SwitchBranch(bpy.types.Operator):
     bl_idname = "bvcs.switch_branch"
     bl_label = "Switch Branch"
+    bl_description = "Switch the active branch for this project"
 
     branch_enum: bpy.props.EnumProperty(
         name="Branch",
@@ -1255,6 +1258,7 @@ class BVCS_OT_SwitchBranch(bpy.types.Operator):
 class BVCS_OT_CreateBranch(bpy.types.Operator):
     bl_idname = "bvcs.create_branch"
     bl_label = "Create Branch"
+    bl_description = "Create a new branch from the current branch HEAD"
 
     branch_name: bpy.props.StringProperty(
         name="Branch Name",
@@ -1301,7 +1305,24 @@ class BVCS_OT_CreateBranch(bpy.types.Operator):
 
         # Switch to the new branch
         _set_active_branch(wm, new_branch["branch_id"], new_branch["branch_name"])
-        wm["bvcs_last_synced_commit_hash"] = ""
+        # The new branch's remote HEAD is the source commit (the branching point).
+        # Record that hash as the synced hash so the first local commit on this
+        # branch picks it up as its base. Without this, push would see remote
+        # history on the new branch but no base on the pending commit and bail
+        # with "Push blocked: remote history exists but your commit has no base".
+        try:
+            new_head_hash = _get_latest_remote_commit_hash(prefs)
+        except Exception:
+            new_head_hash = ""
+        wm["bvcs_last_synced_commit_hash"] = new_head_hash
+        # Rebase any pending local commit onto the new branch's head. Without
+        # this, a pending commit created on the previous branch would carry a
+        # stale base hash that doesn't match the new branch's remote head,
+        # tripping the same "Push blocked: no base" error at push time.
+        pending = wm.get("bvcs_pending_commit")
+        if isinstance(pending, dict):
+            pending["base_commit_hash"] = new_head_hash
+            wm["bvcs_pending_commit"] = pending
         self.report({'INFO'}, f"Created and switched to branch: {new_branch['branch_name']}")
         return {'FINISHED'}
 
@@ -1313,6 +1334,7 @@ class BVCS_OT_CreateBranch(bpy.types.Operator):
 class BVCS_OT_DeleteBranch(bpy.types.Operator):
     bl_idname = "bvcs.delete_branch"
     bl_label = "Delete Branch"
+    bl_description = "Delete the selected branch from the project"
 
     branch_enum: bpy.props.EnumProperty(
         name="Branch",
@@ -1372,10 +1394,158 @@ class BVCS_OT_DeleteBranch(bpy.types.Operator):
         return context.window_manager.invoke_props_dialog(self)
 
 
+# Cache for the source-branch enum used by BVCS_OT_MergeBranch
+_MERGE_SOURCE_BRANCH_ITEMS = [("NONE", "No other branches", "No branches available to merge from")]
+
+
+def _merge_source_branch_items(self, context):
+    return _MERGE_SOURCE_BRANCH_ITEMS
+
+
+class BVCS_OT_MergeBranch(bpy.types.Operator):
+    """Merge another branch into the current branch on the server."""
+    bl_idname = "bvcs.merge_branch"
+    bl_label = "Merge Branch"
+
+    source_branch_id: bpy.props.EnumProperty(
+        name="From",
+        description="Branch to merge into the current branch",
+        items=_merge_source_branch_items,
+    )
+    commit_message: bpy.props.StringProperty(
+        name="Message",
+        description="Optional commit message for the merge commit",
+        default="",
+    )
+
+    def invoke(self, context, event):
+        global _MERGE_SOURCE_BRANCH_ITEMS
+        prefs = get_prefs(context)
+        wm = context.window_manager
+
+        if not prefs.project_id:
+            self.report({'ERROR'}, "No project selected")
+            return {'CANCELLED'}
+        if not prefs.auth_token:
+            self.report({'ERROR'}, "Not logged in")
+            return {'CANCELLED'}
+
+        _ensure_active_branch(wm, prefs)
+        active_branch_id = _get_active_branch_id(wm)
+        if not active_branch_id:
+            self.report({'ERROR'}, "No active branch — switch to a branch first")
+            return {'CANCELLED'}
+
+        branches = _fetch_branches_list(prefs)
+        sources = [b for b in branches if str(b.get("branch_id")) != str(active_branch_id)]
+        if not sources:
+            self.report({'ERROR'}, "No other branches to merge from. Create a branch first.")
+            return {'CANCELLED'}
+
+        _MERGE_SOURCE_BRANCH_ITEMS = [
+            (str(b["branch_id"]), b["branch_name"], f"Merge from {b['branch_name']}")
+            for b in sources
+        ]
+        self.source_branch_id = _MERGE_SOURCE_BRANCH_ITEMS[0][0]
+        self.commit_message = ""
+        return context.window_manager.invoke_props_dialog(self, width=440)
+
+    def draw(self, context):
+        layout = self.layout
+        wm = context.window_manager
+        target_name = _get_active_branch_name(wm)
+        layout.label(text=f"Target: {target_name}", icon='OUTLINER_OB_CURVE')
+        layout.prop(self, "source_branch_id")
+        layout.prop(self, "commit_message")
+        layout.separator()
+        layout.label(text="The server merges branch histories.", icon='INFO')
+        layout.label(text="Pull after merging to update your local scene.", icon='INFO')
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        wm = context.window_manager
+
+        if not self.source_branch_id or self.source_branch_id == "NONE":
+            self.report({'ERROR'}, "No source branch selected")
+            return {'CANCELLED'}
+
+        active_branch_id = _get_active_branch_id(wm)
+        if not active_branch_id:
+            self.report({'ERROR'}, "No active branch")
+            return {'CANCELLED'}
+
+        if str(self.source_branch_id) == str(active_branch_id):
+            self.report({'ERROR'}, "Source and target branches are the same")
+            return {'CANCELLED'}
+
+        api_base = get_api_base(prefs)
+        headers = get_auth_headers(prefs)
+        payload = {"source_branch_id": str(self.source_branch_id)}
+        if self.commit_message.strip():
+            payload["commit_message"] = self.commit_message.strip()
+
+        try:
+            resp = requests.post(
+                f"{api_base}/api/projects/{prefs.project_id}/branches/{active_branch_id}/merge",
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
+        except Exception as e:
+            logger.error(f"Merge request failed: {e}")
+            self.report({'ERROR'}, f"Merge request failed: {e}")
+            return {'CANCELLED'}
+
+        target_name = _get_active_branch_name(wm)
+        source_name = next(
+            (item[1] for item in _MERGE_SOURCE_BRANCH_ITEMS if item[0] == self.source_branch_id),
+            "source",
+        )
+
+        if resp.status_code == 200:
+            try:
+                commit = resp.json()
+            except Exception:
+                commit = {}
+            short_hash = str(commit.get("commit_hash", ""))[:8]
+            # Invalidate sync state so the user is prompted to pull the merge result
+            wm["bvcs_last_synced_commit_hash"] = ""
+            msg = (
+                f"Merged '{source_name}' into '{target_name}'"
+                + (f" (commit {short_hash})." if short_hash else ".")
+                + " Click Pull to sync your scene."
+            )
+            self.report({'INFO'}, msg)
+            return {'FINISHED'}
+
+        if resp.status_code == 409:
+            try:
+                detail = resp.json().get("detail", {})
+            except Exception:
+                detail = {}
+            conflicts = detail.get("conflicts", []) if isinstance(detail, dict) else []
+            names = [c.get("object_name", "?") for c in conflicts]
+            preview = ", ".join(names[:5]) + ("…" if len(names) > 5 else "")
+            self.report(
+                {'ERROR'},
+                f"Merge conflicts on {len(names)} object(s){': ' + preview if names else ''}. "
+                "Resolve via Pull on the target branch or merge in the opposite direction first.",
+            )
+            return {'CANCELLED'}
+
+        try:
+            err = resp.json().get("detail", resp.text)
+        except Exception:
+            err = resp.text
+        self.report({'ERROR'}, f"Merge failed ({resp.status_code}): {err}")
+        return {'CANCELLED'}
+
+
 # ---------------- Push / Pull / Conflicts ----------------
 class BVCS_OT_Push(bpy.types.Operator):
     bl_idname = "bvcs.push"
     bl_label = "Push to Remote"
+    bl_description = "Upload the current commit to the remote server"
 
     def execute(self, context):
         prefs = get_prefs(context)
@@ -1385,11 +1555,13 @@ class BVCS_OT_Push(bpy.types.Operator):
             self.report({'ERROR'}, "No project selected")
             return {'CANCELLED'}
 
-        # Get pending commit info
+        # Get pending commit info. If there's nothing local to push, that's
+        # not an error — the branch (and any prior commits) already live on
+        # the remote. Say so cleanly instead of alarming the user.
         pending_commit = wm.get("bvcs_pending_commit")
         if not pending_commit:
-            self.report({'ERROR'}, "No commit to push. Please commit first.")
-            return {'CANCELLED'}
+            self.report({'INFO'}, "Branch is up to date with remote — no local changes to push.")
+            return {'FINISHED'}
 
         # ── Conflict check ──────────────────────────────────────────────
         try:
@@ -1674,6 +1846,7 @@ class BVCS_OT_Push(bpy.types.Operator):
 class BVCS_OT_PullProject(bpy.types.Operator):
     bl_idname = "bvcs.pull_project"
     bl_label = "Pull Latest from Remote"
+    bl_description = "Download and apply the latest commit from the remote server"
 
     # Set to True when the user confirms a dirty-state merge via the dialog
     _confirmed_dirty_pull: bool = False
@@ -2565,284 +2738,143 @@ bpy.ops.wm.save_as_mainfile(filepath={output_blend!r})
 
 
 class BVCS_OT_CheckConflicts(bpy.types.Operator):
+    """Detect object-level conflicts between local scene and remote HEAD.
+
+    Populates the panel's per-object conflict resolution UI (the same one used
+    by Push/Pull) so the user can pick a resolution for each conflicting object.
+    """
     bl_idname = "bvcs.check_conflicts"
     bl_label = "Check Merge Conflicts"
-
-    _cached_conflicts = []
-    _cached_conflict_items = []
-    _cached_conflict_previews = {}
-    _cached_merge_plan = None
-
-    conflict_id: bpy.props.EnumProperty(
-        name="Conflict",
-        description="Choose a conflict to resolve",
-        items=_enum_conflict_items
-    )
-    resolution: bpy.props.EnumProperty(
-        name="Resolution",
-        description="Choose which version to keep",
-        items=[
-            ("LOCAL", "Keep Local", "Keep your local version of this object"),
-            ("INCOMING", "Keep Remote", "Keep the remote version of this object"),
-            ("KEEP_BOTH", "Keep Both", "Keep both versions (remote renamed with .remote suffix)"),
-        ],
-        default="LOCAL"
-    )
-
-    @staticmethod
-    def _find_object(commit_objects, object_name):
-        for obj in commit_objects:
-            if obj.get("object_name") == object_name:
-                return obj
-        return None
-
-    @staticmethod
-    def _summarize_object(obj):
-        if not obj:
-            return "missing/deleted"
-        blob = str(obj.get("blob_hash", ""))[:10]
-        return f"blob={blob} type={obj.get('object_type', '?')}"
-
-    def _fetch_conflicts(self, prefs):
-        """Fetch server-side conflicts from the API."""
-        api_base = get_api_base(prefs)
-        headers = get_auth_headers(prefs)
-        resp = requests.get(
-            f"{api_base}/api/projects/{prefs.project_id}/conflicts",
-            headers=headers,
-            timeout=10
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-        if not isinstance(payload, list):
-            return []
-        return payload
-
-    def _detect_local_conflicts(self, prefs):
-        """Detect object-level conflicts between local scene and remote HEAD."""
-        parent_objects = _get_parent_commit_objects(prefs)
-        if not parent_objects:
-            return None, {}, {}
-
-        # Build hash maps
-        scene_objects_map = {}
-        for obj in bpy.context.scene.objects:
-            meta = serialize_object_metadata(obj)
-            mesh_bin = None
-            if obj.type in MESH_TYPES and obj.data is not None:
-                mesh_bin = serialize_mesh_data(obj)
-            scene_objects_map[obj.name] = compute_object_hash(meta, mesh_bin)
-
-        remote_objects_map = {
-            name: data.get("blob_hash", "")
-            for name, data in parent_objects.items()
-        }
-
-        # Fetch proper base (common ancestor) for three-way diff
-        wm = bpy.context.window_manager
-        base_hash = _get_last_synced_commit_hash(wm)
-        remote_hash = _get_latest_remote_commit_hash(prefs)
-
-        if not remote_hash or base_hash == remote_hash:
-            # No remote changes — compute local diff only
-            return None, scene_objects_map, remote_objects_map
-
-        # Three-way merge with proper base
-        base_objects_map = _get_commit_objects_by_hash(prefs, base_hash)
-        merge_plan = compute_object_diff(
-            base_objects_map,    # base (last synced commit)
-            scene_objects_map,   # local
-            remote_objects_map,  # remote HEAD
-        )
-
-        return merge_plan, scene_objects_map, remote_objects_map
+    bl_description = "Detect and review merge conflicts between local and remote changes"
 
     def execute(self, context):
         prefs = get_prefs(context)
+        wm = context.window_manager
+
         if not prefs.project_id:
             self.report({'ERROR'}, "No project selected")
             return {'CANCELLED'}
         if not prefs.auth_token:
             self.report({'ERROR'}, "Not logged in")
             return {'CANCELLED'}
-        if not self.conflict_id or self.conflict_id == "NONE":
-            self.report({'ERROR'}, "No conflict selected")
-            return {'CANCELLED'}
-
-        conflict = next(
-            (c for c in self.__class__._cached_conflicts
-             if str(c.get("conflict_id") or c.get("object_name")) == self.conflict_id),
-            None
-        )
-        if not conflict:
-            self.report({'ERROR'}, "Selected conflict was not found")
-            return {'CANCELLED'}
 
         try:
-            api_base = get_api_base(prefs)
-            headers = get_auth_headers(prefs)
-            object_name = conflict.get("object_name")
+            parent_objects = _get_parent_commit_objects(prefs)
+            if not parent_objects:
+                self.report({'INFO'}, "No remote commits on the active branch — nothing to compare against")
+                return {'FINISHED'}
 
-            # Server-side conflict resolution
-            if conflict.get("conflict_id"):
-                conflict_id = conflict["conflict_id"]
-                source_commit_id = conflict.get("source_commit_id")
-                target_branch_id = conflict.get("target_branch_id")
+            scene_objects_map = {}
+            for obj in bpy.context.scene.objects:
+                meta = serialize_object_metadata(obj)
+                mesh_bin = None
+                if obj.type in MESH_TYPES and obj.data is not None:
+                    mesh_bin = serialize_mesh_data(obj)
+                scene_objects_map[obj.name] = compute_object_hash(meta, mesh_bin)
 
-                if not object_name or not source_commit_id or not target_branch_id:
-                    self.report({'ERROR'}, "Conflict payload is missing required fields")
-                    return {'CANCELLED'}
+            remote_objects_map = {
+                name: data.get("blob_hash", "")
+                for name, data in parent_objects.items()
+            }
 
-                source_resp = requests.get(
-                    f"{api_base}/api/projects/{prefs.project_id}/commits/{source_commit_id}/objects",
-                    headers=headers, timeout=10
-                )
-                source_resp.raise_for_status()
-                source_obj = self._find_object(source_resp.json(), object_name)
+            base_hash = _get_last_synced_commit_hash(wm)
+            remote_hash = _get_latest_remote_commit_hash(prefs)
 
-                branches_resp = requests.get(
-                    f"{api_base}/api/projects/{prefs.project_id}/branches",
-                    headers=headers, timeout=10
-                )
-                branches_resp.raise_for_status()
-                target_branch = next(
-                    (b for b in branches_resp.json()
-                     if str(b.get("branch_id")) == str(target_branch_id)), None
-                )
-                if not target_branch:
-                    self.report({'ERROR'}, "Target branch not found")
-                    return {'CANCELLED'}
+            if not remote_hash:
+                self.report({'INFO'}, "No remote commits found on the active branch")
+                return {'FINISHED'}
 
-                local_obj = None
-                head_commit_id = target_branch.get("head_commit_id")
-                if head_commit_id:
-                    local_resp = requests.get(
-                        f"{api_base}/api/projects/{prefs.project_id}/commits/{head_commit_id}/objects",
-                        headers=headers, timeout=10
-                    )
-                    local_resp.raise_for_status()
-                    local_obj = self._find_object(local_resp.json(), object_name)
+            base_objects_map = (
+                _get_commit_objects_by_hash(prefs, base_hash)
+                if base_hash and base_hash != remote_hash
+                else {}
+            )
 
-                chosen_obj = local_obj if self.resolution == "LOCAL" else source_obj
-                if not chosen_obj:
-                    self.report({'ERROR'}, f"Chosen version is missing for '{object_name}'")
-                    return {'CANCELLED'}
+            merge_plan = compute_object_diff(
+                base_objects_map,
+                scene_objects_map,
+                remote_objects_map,
+            )
 
-                commit_payload = {
-                    "branch_id": str(target_branch_id),
-                    "commit_message": f"Resolve conflict: {object_name} ({self.resolution})",
-                    "objects": [{
-                        "object_name": chosen_obj.get("object_name"),
-                        "object_type": chosen_obj.get("object_type"),
-                        "json_data_path": chosen_obj.get("json_data_path"),
-                        "mesh_data_path": chosen_obj.get("mesh_data_path"),
-                        "parent_object_id": chosen_obj.get("parent_object_id"),
-                        "blob_hash": chosen_obj.get("blob_hash"),
-                    }]
-                }
+            if not merge_plan.conflicts:
+                if "bvcs_merge_conflicts" in wm:
+                    del wm["bvcs_merge_conflicts"]
+                if "bvcs_push_conflict" in wm:
+                    del wm["bvcs_push_conflict"]
+                wm.bvcs_conflict_items.clear()
+                self.report({'INFO'}, "No merge conflicts detected")
+                return {'FINISHED'}
 
-                create_resp = requests.post(
+            # Look up the remote commit's UUID so the panel can reference it
+            remote_commit_id = ""
+            try:
+                api_base = get_api_base(prefs)
+                headers = get_auth_headers(prefs)
+                commits_resp = requests.get(
                     f"{api_base}/api/projects/{prefs.project_id}/commits",
-                    json=commit_payload, headers=headers, timeout=15
+                    params={"branch_name": _get_active_branch_name(wm)},
+                    headers=headers,
+                    timeout=10,
                 )
-                create_resp.raise_for_status()
-                created_commit = create_resp.json()
+                commits_resp.raise_for_status()
+                commits = commits_resp.json() or []
+                if commits:
+                    remote_commit_id = str(commits[0].get("commit_id", ""))
+            except Exception as e:
+                logger.warning(f"Could not resolve remote commit id for conflict state: {e}")
 
-                resolve_resp = requests.put(
-                    f"{api_base}/api/projects/{prefs.project_id}/conflicts/{conflict_id}",
-                    headers=headers, timeout=10
-                )
-                resolve_resp.raise_for_status()
+            wm["bvcs_merge_conflicts"] = {
+                "flow": "check",
+                "base_commit_hash": base_hash or "",
+                "remote_commit_hash": remote_hash,
+                "remote_commit_id": remote_commit_id,
+                "detected_at": datetime.now(timezone.utc).isoformat(),
+                "merge_plan": {
+                    "auto_merge_local": merge_plan.auto_merge_local,
+                    "auto_merge_remote": merge_plan.auto_merge_remote,
+                    "unchanged": merge_plan.unchanged,
+                    "conflicts": merge_plan.conflicts,
+                },
+            }
 
-                short_hash = created_commit.get("commit_hash", "")[:8]
-                self.report({'INFO'}, f"Conflict resolved: '{object_name}' via {self.resolution} (commit {short_hash})")
-            else:
-                # Local-only conflict (from object-level diff)
-                self.report({'INFO'}, f"Conflict for '{object_name}' noted — resolution: {self.resolution}")
+            wm.bvcs_conflict_items.clear()
+            for c in merge_plan.conflicts:
+                item = wm.bvcs_conflict_items.add()
+                item.object_name = c["object_name"]
+                item.conflict_type = str(c.get("conflict_type", ""))
+                item.local_hash = str(c.get("local_hash", ""))[:10]
+                item.remote_hash = str(c.get("remote_hash", ""))[:10]
+                ctype = str(c.get("conflict_type", ""))
+                if ctype == "DELETED_LOCALLY":
+                    item.resolution = "KEEP_REMOTE"
+                elif ctype == "DELETED_REMOTELY":
+                    item.resolution = "KEEP_LOCAL"
+                else:
+                    item.resolution = "KEEP_LOCAL"
 
+            wm["bvcs_push_conflict"] = {
+                "base_commit_hash": base_hash or "",
+                "remote_commit_hash": remote_hash,
+                "conflict_objects": [c["object_name"] for c in merge_plan.conflicts],
+                "detected_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            count = len(merge_plan.conflicts)
+            self.report(
+                {'WARNING'},
+                f"Found {count} conflict(s). Resolve each below, then click Apply Resolutions."
+            )
             return {'FINISHED'}
-        except Exception as e:
-            logger.error(f"Conflict resolution failed: {e}")
-            self.report({'ERROR'}, f"Conflict resolution failed: {e}")
-            return {'CANCELLED'}
-
-    def invoke(self, context, event):
-        prefs = get_prefs(context)
-        if not prefs.project_id:
-            self.report({'ERROR'}, "No project selected")
-            return {'CANCELLED'}
-        if not prefs.auth_token:
-            self.report({'ERROR'}, "Not logged in")
-            return {'CANCELLED'}
-
-        try:
-            # Check server-side conflicts
-            conflicts = self._fetch_conflicts(prefs)
-            unresolved = [c for c in conflicts if not c.get("resolved", False)]
-
-            # Also detect local object-level conflicts
-            merge_plan, scene_map, remote_map = self._detect_local_conflicts(prefs)
-            if merge_plan and merge_plan.conflicts:
-                for mc in merge_plan.conflicts:
-                    unresolved.append({
-                        "object_name": mc["object_name"],
-                        "conflict_type": mc["conflict_type"],
-                        "local_hash": mc.get("local_hash"),
-                        "remote_hash": mc.get("remote_hash"),
-                    })
-
-            if not unresolved:
-                self.report({'INFO'}, "No unresolved merge conflicts")
-                self.__class__._cached_conflicts = []
-                self.__class__._cached_conflict_items = []
-                return {'CANCELLED'}
-
-            self.__class__._cached_conflicts = unresolved
-            self.__class__._cached_conflict_previews = {}
-            self.__class__._cached_conflict_items = []
-
-            for c in unresolved:
-                cid = str(c.get("conflict_id") or c.get("object_name", ""))
-                if not cid:
-                    continue
-                label = f"{c.get('object_name', 'Unknown')} [{c.get('conflict_type', 'UNKNOWN')}]"
-                desc = f"Local: {str(c.get('local_hash', ''))[:8]} Remote: {str(c.get('remote_hash', ''))[:8]}"
-                self.__class__._cached_conflict_items.append((cid, label, desc))
-
-                self.__class__._cached_conflict_previews[cid] = {
-                    "local": f"hash={str(c.get('local_hash', 'missing'))[:10]}",
-                    "incoming": f"hash={str(c.get('remote_hash', 'missing'))[:10]}",
-                    "type": str(c.get("conflict_type", "")),
-                }
-
-            if not self.__class__._cached_conflict_items:
-                self.report({'ERROR'}, "Conflicts found but no valid IDs")
-                return {'CANCELLED'}
-
-            self.conflict_id = self.__class__._cached_conflict_items[0][0]
-            return context.window_manager.invoke_props_dialog(self, width=680)
         except Exception as e:
             logger.error(f"Failed to check conflicts: {e}")
             self.report({'ERROR'}, f"Failed to check conflicts: {e}")
             return {'CANCELLED'}
 
-    def draw(self, context):
-        layout = self.layout
-        layout.prop(self, "conflict_id")
-        layout.prop(self, "resolution")
-        preview = self.__class__._cached_conflict_previews.get(self.conflict_id, {})
-        layout.label(text=f"Type: {preview.get('type', 'unknown')}")
-        layout.label(text=f"Local: {preview.get('local', 'unknown')}")
-        layout.label(text=f"Remote: {preview.get('incoming', 'unknown')}")
-        layout.separator()
-        layout.label(text="LOCAL = your version, REMOTE = remote HEAD", icon='INFO')
-        if self.resolution == "KEEP_BOTH":
-            layout.label(text="Remote copy will be renamed with .remote suffix", icon='INFO')
-
 # ---------------- Diff/Status Operator ----------------
 class BVCS_OT_RefreshStatus(bpy.types.Operator):
     bl_idname = "bvcs.refresh_status"
     bl_label = "Refresh Object Status"
+    bl_description = "Refresh the diff status of all scene objects against the last commit"
 
     _cached_diff = {}
 
@@ -2929,6 +2961,7 @@ class BVCS_PT_Panel(bpy.types.Panel):
             row.operator("bvcs.switch_branch", text="Switch")
             row.operator("bvcs.create_branch", text="New")
             row.operator("bvcs.delete_branch", text="Delete")
+            box.operator("bvcs.merge_branch", text="Merge Branch", icon='AUTOMERGE_ON')
 
             # ── Object Status / Diff ──
             layout.separator()
@@ -3088,6 +3121,7 @@ classes = [
     BVCS_OT_SwitchBranch,
     BVCS_OT_CreateBranch,
     BVCS_OT_DeleteBranch,
+    BVCS_OT_MergeBranch,
     BVCS_OT_Push,
     BVCS_OT_PullProject,
     BVCS_OT_LoadProjectFile,
