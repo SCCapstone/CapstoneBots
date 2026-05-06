@@ -1,32 +1,85 @@
 # Blender Collab
 
-**Collaborative Version Control for Blender**
+> **Collaborative version control for Blender — a web app + Blender add-on that brings Git-style commits, branches, and merge-conflict resolution to 3D scenes by tracking individual Blender objects (not whole `.blend` files) for efficient, deduplicated, object-level history.**
 
-A web-based Version Control System (VCS) for Blender, enabling teams to collaborate on 3D projects with granular version management. It replaces traditional file-based VCS by exporting individual Blender objects as JSON (with mesh data stored separately in S3), allowing efficient storage, content deduplication, and object-level version tracking.
+---
 
-## Documentation
+## Service Status
 
-| Document | Description |
-|----------|-------------|
-| [Storage & Versioning](./STORAGE.md) | File routing, object storage, deduplication, version management |
-| [Architecture Diagrams](./ARCHITECTURE_DIAGRAMS.md) | Visual component relationships and data flows |
-| [Deployment Guide](./DEPLOYMENT.md) | Production deployment (Railway + Vercel) and local Docker setup |
-| [Download Guide](./DOWNLOAD_GUIDE.md) | Scripts for downloading Blender files from S3 |
-| [Deliverables](./DELIVERABLES.md) | Internal project tracking and implementation summary |
-| [Backend README](./backend/README.md) | Backend setup, API overview, environment variables |
-| [Frontend README](./frontend/README.md) | Frontend setup and page structure |
-| [Integration Guide](./backend/INTEGRATION_GUIDE.md) | Integrating storage into the commit workflow |
-| [Storage Quick Reference](./backend/storage/QUICK_REFERENCE.md) | Storage API cheat sheet |
-| [Blender Addon Install](./export/README.md) | Installing the BVCS Blender addon |
-| [API Docs (local)](http://localhost:8000/docs) | Interactive Swagger docs (when running locally) |
+> ### NOT LIVE — Hosted service taken offline on **2026-05-05**
+>
+> The hosted Blender Collab service (DigitalOcean Hosting + S3 storage) has been **shut down as of May 5, 2026** because of ongoing hosting / object-storage costs.
+>
+> **What this means for you:**
+> - The link `https://blendercollab.pakshpatel.tech` will no longer respond.
+> - The Blender add-on cannot push or pull from the hosted backend.
+> - Account signups, password resets, and project invites no longer work against the hosted instance.
+>
+> **What's planned (possibly):**
+> - A slimmed-down version of the app may eventually be redeployed at lower cost. No firm timeline.
+>
+> **What you can still do:**
+> - Clone this repository and run the entire stack locally with Docker Compose. Everything — frontend, backend, database, MinIO object storage, and the Blender add-on — works end-to-end on a single machine. See [Quick Start](#quick-start-run-it-locally) below.
 
-## Quick Start (Docker Compose)
+---
 
-The easiest way to run the full stack locally.
+## What's in this Repo
+
+| Component | Description |
+|-----------|-------------|
+| **Web App** (`backend/` + `frontend/`) | FastAPI + Postgres backend and a Next.js / React dashboard for browsing projects, commits, members, and per-object version history. |
+| **Blender Add-on** (`blender_vcs/`) | A native Blender add-on (Python / `bpy`) that exports each object as JSON + glTF, hashes mesh blobs, and pushes/pulls commits against the backend from inside Blender's UI. |
+| **Local Stack** (`docker-compose.yml`) | One-command Docker Compose stack that brings up Postgres, MinIO, the FastAPI API, and the Next.js frontend together. |
+
+## Features
+
+### Authentication & Accounts
+- JWT-based auth with bearer tokens
+- Email verification on signup (SMTP or console fallback for local dev)
+- Forgot / reset password flow with single-use tokens
+- Account deletion with ownership transfer for shared projects
+
+### Project Collaboration
+- Create and manage Blender projects
+- Invite collaborators by email with role-based permissions (owner / editor / viewer)
+- Accept or decline project invitations from the dashboard
+- Object-level locking to prevent conflicting edits
+
+### Version Control
+- Branch and commit history with a timeline view
+- Object-level diffing and merge-conflict detection
+- Content deduplication via SHA-256 hashing of mesh blobs
+- Full `.blend` snapshot uploads for recovery
+
+### Blender Add-on
+- Stage, commit, push, and pull from inside Blender
+- Per-object diff and conflict resolution UI
+- See [`export/README.md`](./export/README.md) for install steps
+
+### Web Dashboard
+- Project history and commit browser
+- File uploads and downloads
+- Storage statistics and per-object version history
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Backend API | FastAPI (Python 3.11), async SQLAlchemy |
+| Database | PostgreSQL 15 (+ Alembic migrations) |
+| Object Storage | MinIO (local) / AWS S3 (was production) |
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS 4 |
+| Auth | JWT (python-jose + bcrypt) |
+| Email | SMTP via smtplib (with console fallback for dev) |
+| Blender Add-on | Python (`bpy`) — single distributable folder |
+| Local Dev | Docker Compose |
+
+## Quick Start (Run It Locally)
+
+The easiest way to run the full stack on your own machine.
 
 ### Prerequisites
-
-- [Docker](https://www.docker.com/) and Docker Compose installed
+- [Docker](https://www.docker.com/) and Docker Compose
 
 ### 1. Configure environment
 
@@ -35,19 +88,19 @@ Create a `.env` file in the project root:
 ```env
 JWT_SECRET=<generate with: python -c "import secrets; print(secrets.token_urlsafe(32))">
 
-# S3 / MinIO
-S3_ACCESS_KEY=##################### or minioadmin for local MinIO
-S3_SECRET_KEY=##################### or minioadmin for local MinIO
+# S3 / MinIO (use minioadmin / minioadmin to talk to the bundled MinIO container)
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin
+S3_ENDPOINT=http://minio:9000
+S3_BUCKET=capstonebots
+S3_SECURE=false
 
-# SMTP (optional — if not set, email delivery fails closed; set EMAIL_DEBUG=true for local dev to print links to console)
-SMTP_HOST=example.com
-SMTP_PORT=####
-SMTP_USER=your-email@example.com
-SMTP_PASSWORD=your-smtp-password
-SMTP_FROM=noreply@yourdomain.com
+# SMTP — leave blank and set EMAIL_DEBUG=true to print verification links to the backend console
 EMAIL_DEBUG=true
 FRONTEND_URL=http://localhost:3000
 ```
+
+See [`.env.example`](./.env.example) for the full list of variables.
 
 ### 2. Build and run
 
@@ -59,9 +112,9 @@ docker compose up --build
 
 | Service | URL |
 |---------|-----|
-| Frontend | [http://localhost:3000](http://localhost:3000) |
-| Backend API Docs | [http://localhost:8000/docs](http://localhost:8000/docs) |
-| MinIO Console | [http://localhost:9001](http://localhost:9001) |
+| Frontend | http://localhost:3000 |
+| Backend API docs | http://localhost:8000/docs |
+| MinIO console | http://localhost:9001 |
 
 ### 4. Stop
 
@@ -69,87 +122,32 @@ docker compose up --build
 docker compose down
 ```
 
-## Features
+## Install the Blender Add-on
 
-### Authentication & Accounts
-- JWT-based authentication with Bearer tokens
-- Email verification on signup (link sent via SMTP or printed to console)
-- Forgot / reset password flow with secure single-use tokens
-- Account deletion with ownership transfer for shared projects
+1. Grab `export/blender_vcs.zip` (or zip the `blender_vcs/` folder yourself — the ZIP must contain a top-level folder named `blender_vcs/` with `__init__.py` inside).
+2. In Blender: **Edit → Preferences → Add-ons → Install from Disk** and pick the ZIP.
+3. Enable **BVCS** in the add-ons list.
+4. Press **N** in the 3D viewport and switch to the **BVCS** tab.
+5. In the add-on preferences, point the backend URL at your local instance (`http://localhost:8000`) and log in with an account you created on the local frontend.
 
-### Project Collaboration
-- Create and manage Blender projects
-- Invite collaborators by email with role-based permissions (owner / editor / viewer)
-- Accept or decline project invitations
-- Object-level locking to prevent conflicting edits
-
-### Version Control
-- Branch and commit history (timeline view)
-- Object-level diffing and merge conflict detection
-- Content deduplication via SHA-256 hashing
-- Full `.blend` snapshots for recovery
-
-### Blender Addon
-- Export, commit, pull, and resolve conflicts from inside Blender
-- See the [addon install guide](./export/README.md)
-
-### Web Dashboard
-- Project history and commit browser
-- File uploads and downloads
-- Storage statistics and version history
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Backend API | FastAPI (Python 3.11) |
-| Database | PostgreSQL 15 |
-| Object Storage | MinIO / AWS S3 |
-| Frontend | Next.js 16, React 19, Tailwind CSS 4 |
-| Authentication | JWT (python-jose + bcrypt) |
-| Email | SMTP via smtplib (with console fallback) |
-| Blender Addon | Python (bpy) |
-| Containerization | Docker Compose |
-
-## Environment Variables
-
-All variables are set in the root `.env` file and injected into containers via `docker-compose.yml`.
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `JWT_SECRET` | **Yes** | — | Secret key for signing JWT tokens |
-| `DATABASE_URL` | No | Set in compose | PostgreSQL connection string |
-| `S3_ENDPOINT` | No | `https://s3.us-east-1.amazonaws.com` | S3-compatible endpoint (use `http://minio:9000` for local MinIO) |
-| `S3_ACCESS_KEY` | **Yes** | — | S3 access key |
-| `S3_SECRET_KEY` | **Yes** | — | S3 secret key |
-| `S3_SECURE` | No | `true` | Use HTTPS for S3 (`false` for local MinIO) |
-| `S3_BUCKET` | No | `blender-vcs-prod` | S3 bucket name (`capstonebots` for local MinIO) |
-| `S3_REGION` | No | `us-east-1` | S3 region |
-| `SMTP_HOST` | No | — | SMTP server (required for email delivery; see `EMAIL_DEBUG`) |
-| `SMTP_PORT` | No | `2525` | SMTP port |
-| `SMTP_USER` | No | — | SMTP login |
-| `SMTP_PASSWORD` | No | — | SMTP password |
-| `SMTP_FROM` | No | `SMTP_USER` | From address for emails |
-| `EMAIL_DEBUG` | No | `false` | Print verification/reset links to console when SMTP is not configured (local dev only) |
-| `FRONTEND_URL` | No | `http://localhost:3000` | Base URL for email links |
-| `INVITE_EXPIRY_DAYS` | No | `7` | Days before invitations expire |
+Full step-by-step instructions: [`export/README.md`](./export/README.md).
 
 ## Manual Setup (Without Docker)
 
 ### Prerequisites
-
-- Python 3.9+
-- Node.js 20+ and npm
-- PostgreSQL (running locally or accessible)
-- MinIO (optional, for storage features)
+- Python 3.11+
+- Node.js 20+
+- PostgreSQL running locally
+- (Optional) MinIO for storage features
 
 ### Backend
 
 ```bash
 cd backend
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+alembic upgrade head
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -161,131 +159,130 @@ npm install
 npm run dev
 ```
 
-### Database Only (via Docker)
+### Database only (via Docker)
 
 ```bash
 docker compose up -d db
 ```
+
+## Environment Variables
+
+For local Docker Compose, everything lives in a single root `.env` file and is injected into containers by `docker-compose.yml`. For deployed environments (the original setup ran both apps on DigitalOcean App Platform), set the same variables in your platform's dashboard.
+
+### Backend
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `JWT_SECRET` | **Yes** | — | Secret key for signing JWT tokens |
+| `DATABASE_URL` | **Yes** (deploy) | Set in compose | PostgreSQL connection string. Auto-injected by Docker Compose locally; set explicitly in production. |
+| `S3_ENDPOINT` | **Yes** | `https://s3.us-east-1.amazonaws.com` | S3-compatible endpoint (`http://minio:9000` for local MinIO) |
+| `S3_ACCESS_KEY` | **Yes** | — | S3 access key |
+| `S3_SECRET_KEY` | **Yes** | — | S3 secret key |
+| `S3_BUCKET` | **Yes** | `blender-vcs-prod` | S3 bucket name (`capstonebots` for local MinIO) |
+| `S3_REGION` | No | `us-east-1` | S3 region |
+| `S3_SECURE` | No | `true` | Use HTTPS for S3 (`false` for local MinIO) |
+| `SMTP_HOST` | No | — | SMTP server (required for live email delivery — original deploy used `smtp-pulse.com`) |
+| `SMTP_PORT` | No | `2525` | SMTP port |
+| `SMTP_USER` | No | — | SMTP login |
+| `SMTP_PASSWORD` | No | — | SMTP password |
+| `SMTP_FROM` | No | `SMTP_USER` | From address for outbound mail (e.g. `noreply@yourdomain.com`) |
+| `EMAIL_DEBUG` | No | `false` | Print verification / reset links to console instead of sending (local dev only) |
+| `FRONTEND_URL` | No | `http://localhost:3000` | Base URL for links embedded in emails. On DigitalOcean App Platform this was bound to the frontend component via `${capstone-deploy-frontend.PUBLIC_URL}` |
+| `INVITE_EXPIRY_DAYS` | No | `7` | Days before a project invitation expires |
+
+### Frontend
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `NEXT_PUBLIC_BACKEND_URL` | **Yes** | `http://localhost:8000` | Base URL the browser uses to call the backend API. Must be set at build time because Next.js inlines `NEXT_PUBLIC_*` vars into the client bundle. |
+| `DATABASE_URL` | No | — | Used during build / SSR if the frontend needs a direct DB read. Not required for the standard hosted setup. |
+
+### Reference: original DigitalOcean App Platform setup
+
+For anyone redeploying this on DigitalOcean App Platform (or a similar PaaS), here's the exact set of env vars the production deploy used. Values are redacted; supply your own.
+
+**Frontend component** (`capstone-deploy-frontend`):
+
+```env
+NEXT_PUBLIC_BACKEND_URL=<backend component PUBLIC_URL>
+DATABASE_URL=<postgres connection string>
+```
+
+**Backend component** (`capstone-deploy-backend`):
+
+```env
+DATABASE_URL=<postgres connection string>
+JWT_SECRET=<generate with python -c "import secrets; print(secrets.token_urlsafe(32))">
+S3_ACCESS_KEY=<s3 access key>
+S3_SECRET_KEY=<s3 secret key>
+S3_BUCKET=<bucket name>
+S3_ENDPOINT=<s3 endpoint URL>
+S3_REGION=us-east-1
+S3_SECURE=true
+SMTP_HOST=smtp-pulse.com
+SMTP_PORT=2525
+SMTP_USER=<smtp user>
+SMTP_PASSWORD=<smtp password>
+SMTP_FROM=noreply@yourdomain.com
+FRONTEND_URL=${capstone-deploy-frontend.PUBLIC_URL}
+```
+
+The `${capstone-deploy-frontend.PUBLIC_URL}` syntax is DigitalOcean's component-binding feature — it auto-substitutes the frontend component's public URL at deploy time, so the backend always builds correct email links without hard-coding a domain.
 
 ## Testing
 
-This project uses:
-
-- Backend: pytest (unit + behavioral API tests)
-- Frontend: Jest + React Testing Library (unit + behavioral UI tests)
-
-The goal is to run one command before each commit and catch regressions in authentication, project collaboration, and core UI flows.
-
-### Install / Setup
+Backend uses `pytest`; frontend uses `Jest` + React Testing Library.
 
 ```bash
-# Backend
-cd backend
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-
-# Frontend
-cd ../frontend
-npm install
-
-# Optional for DB-backed behavioral tests
-cd ..
-docker compose up -d db
-```
-
-### Run All Tests (Single Command)
-
-From repo root:
-
-```bash
+# Run everything (from repo root, requires backend/.venv to exist)
 ./tests/run_all_tests.sh
-```
 
-This runs backend core tests first, then frontend tests.
-Storage integration tests that require MinIO/S3 are intentionally excluded from this command.
-
-### What This Covers
-
-- Unit tests: pure logic and boundary conditions (empty/invalid input, duplicate states, role checks)
-- Behavioral tests: API and UI flows that mirror real user behavior
-- Regression guard: invitation lifecycle, access control, and auth refresh behavior
-
-### Test Location Pattern
-
-- Backend tests: `backend/tests/test_*.py`
-- Frontend tests: `frontend/tests/**/*.test.ts?(x)` and `frontend/src/__tests__/**/*.test.ts?(x)`
-
-### Helpful Targeted Commands
-
-```bash
-# Backend — unit tests only
-cd backend && .venv/bin/python -m pytest tests/test_unit_auth.py tests/test_unit_models.py tests/test_unit_schemas.py tests/test_unit_schemas_extended.py tests/test_unit_storage_utils.py -v
-
-# Backend — behavioral tests only
-cd backend && .venv/bin/python -m pytest tests/test_auth.py tests/test_projects.py tests/test_authorization.py tests/test_behavior_api.py tests/test_behavior_projects_auth.py tests/test_delete_account.py -v
-
-# Frontend — unit tests only
-cd frontend && npm test -- --testPathPattern="authApi|projectsApi" --watchAll=false
-
-# Frontend — behavioral tests only
-cd frontend && npm test -- --testPathPattern="AuthProvider|LoginPage|SignupPage|HomePage|CommitItem" --watchAll=false
-
-# Backend — all core tests (unit + behavioral)
+# Backend only
 cd backend && .venv/bin/python -m pytest tests/ -v --ignore=tests/test_storage.py --ignore=tests/test_object_storage.py
 
-# Frontend — all tests
+# Frontend only
 cd frontend && npm test -- --watchAll=false
-
-# Newly added milestone tests
-cd backend && .venv/bin/python -m pytest tests/test_unit_project_utils.py tests/test_behavior_invitation_lifecycle.py -v
-cd frontend && npm test -- tests/AuthProvider.behavior.test.tsx --runInBand
-
-# Storage tests (mock-based, no MinIO/S3 needed)
-cd backend && .venv/bin/python -m pytest tests/test_storage.py -v
-
-# Object storage integration tests (requires live S3 — runs in CI)
-cd backend && .venv/bin/python -m pytest tests/test_object_storage.py -v
 ```
 
-### Troubleshooting
-
-- If `./tests/run_all_tests.sh` fails immediately:
-  - create backend virtualenv and install dependencies using setup commands above.
-- If DB-backed behavioral tests are skipped:
-  - start PostgreSQL with `docker compose up -d db`.
-- If storage integration tests fail with connection errors:
-  - ensure MinIO/S3 endpoint and credentials are configured, then run those tests separately.
-- If frontend tests fail with missing packages:
-  - run `cd frontend && npm install`.
+Storage integration tests (`tests/test_object_storage.py`) require a live S3 / MinIO instance and are excluded from the default run.
 
 ## Project Structure
 
 ```
 CapstoneBots/
 ├── backend/                 # FastAPI backend
-│   ├── main.py              # App entry point
+│   ├── main.py              # App entry, CORS, lifespan
 │   ├── models.py            # SQLAlchemy models
 │   ├── schemas.py           # Pydantic schemas
-│   ├── database.py          # DB connection
-│   ├── routers/             # API route handlers
-│   │   ├── users.py         # Auth, registration, password reset, verification
-│   │   ├── projects.py      # Projects, branches, commits, collaboration
-│   │   └── storage.py       # File upload/download, storage stats
-│   ├── utils/               # Auth, email, permissions helpers
-│   ├── storage/             # S3/MinIO service layer
-│   ├── migrations/          # Database migrations
-│   └── tests/               # pytest test suite
-├── frontend/                # Next.js frontend
+│   ├── database.py          # Async DB engine + session
+│   ├── routers/             # users.py, projects.py, storage.py
+│   ├── utils/               # auth, email, permissions, s3 cleanup
+│   ├── storage/             # S3 / MinIO service layer
+│   ├── migrations/          # Alembic migrations
+│   └── tests/               # pytest suite
+├── frontend/                # Next.js dashboard
 │   └── src/
-│       ├── app/             # Pages (login, signup, projects, settings, etc.)
-│       ├── components/      # Shared components (AuthProvider, etc.)
+│       ├── app/             # Pages (login, signup, projects, settings, ...)
+│       ├── components/      # Shared React components
 │       └── lib/             # API client functions
-├── export/                  # Blender addon ZIP + install guide
-├── blender_vcs/             # Blender addon source
-├── docker-compose.yml       # Full local stack
-└── .env                     # Environment variables (not committed)
+├── blender_vcs/             # Blender add-on source
+├── export/                  # Pre-built add-on ZIP + install guide
+├── tests/run_all_tests.sh   # One-shot test runner
+├── docker-compose.yml       # Full local stack (db + minio + api + web)
+└── .env.example             # Environment variable template
 ```
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Architecture Diagrams](./ARCHITECTURE_DIAGRAMS.md) | Component relationships and data flow |
+| [Backend README](./backend/README.md) | Backend setup, API overview, env vars |
+| [Frontend README](./frontend/README.md) | Frontend setup and page structure |
+| [Storage Integration Guide](./backend/INTEGRATION_GUIDE.md) | How storage ties into the commit workflow |
+| [Storage Quick Reference](./backend/storage/QUICK_REFERENCE.md) | Storage API cheat sheet |
+| [Blender Add-on Install](./export/README.md) | Installing the BVCS add-on |
+| API Docs (local) | http://localhost:8000/docs (when running locally) |
 
 ## Authors
 
@@ -297,4 +294,5 @@ CapstoneBots/
 
 ---
 
-**Last Updated**: February 2026
+**Status**: Hosted service offline since 2026-05-05 — local Docker Compose deploy fully supported.
+**Last Updated:** 2026-05-05

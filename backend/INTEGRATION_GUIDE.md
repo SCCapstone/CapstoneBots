@@ -373,10 +373,9 @@ async def test_create_commit_with_storage():
 
 ## References
 
-- [Storage System Documentation](../STORAGE.md)
-- [StorageService API](./storage_service.py)
-- [Storage Routes](../routers/storage.py)
-- [Integration Examples](./examples.py)
+- [StorageService API](./storage/storage_service.py)
+- [Storage Routes](./routers/storage.py)
+- [Storage Quick Reference](./storage/QUICK_REFERENCE.md)
 
 ---
 

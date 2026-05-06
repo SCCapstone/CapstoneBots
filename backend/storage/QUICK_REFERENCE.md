@@ -272,9 +272,9 @@ S3_BUCKET=capstonebots             # Bucket name
 
 ## Related Documentation
 
-- [Storage & Versioning System](../STORAGE.md) - Complete guide
-- [Integration Examples](./examples.py) - Code examples
-- [API Documentation](http://localhost:8000/docs) - Interactive API docs
+- [Storage Service Source](./storage_service.py) - High-level S3 operations
+- [Integration Guide](../INTEGRATION_GUIDE.md) - How storage ties into commits
+- [API Documentation](http://localhost:8000/docs) - Interactive API docs (when running locally)
 
 ---
 
