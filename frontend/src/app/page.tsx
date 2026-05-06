@@ -3,7 +3,6 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useEffect, useState } from "react";
-import { useAuth } from "@/components/AuthProvider";
 
 type Theme = "light" | "dark";
 
@@ -16,7 +15,6 @@ const DEFAULT_THEME: Theme = "dark";
 export default function Home() {
   const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
   const [mounted, setMounted] = useState(false);
-  const { token, hydrated } = useAuth();
 
   // Post-hydration: read the real theme the inline script applied to the DOM,
   // then flip mounted on so theme-dependent UI can render accurately. Syncing
@@ -38,12 +36,11 @@ export default function Home() {
     } catch { }
   }, [theme, mounted]);
 
-  const loggedIn = hydrated && !!token;
-
   return (
     <main className="min-h-screen bg-white text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-100">
-      <NavBar theme={theme} setTheme={setTheme} loggedIn={loggedIn} />
-      <Hero loggedIn={loggedIn} />
+      <ShutdownBanner />
+      <NavBar theme={theme} setTheme={setTheme} />
+      <Hero />
       <Features />
       <HowItWorks />
       <DashboardSection />
@@ -56,14 +53,26 @@ export default function Home() {
   );
 }
 
+function ShutdownBanner() {
+  return (
+    <div className="border-b border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-200">
+      <div className="mx-auto flex max-w-6xl flex-col items-center justify-center gap-1 px-4 py-2 text-center text-xs sm:flex-row sm:gap-2 sm:text-sm">
+        <span className="font-semibold uppercase tracking-wider">Service offline</span>
+        <span className="hidden sm:inline opacity-60">—</span>
+        <span>
+          The hosted Blender Collab service was shut down on May 5, 2026 due to hosting costs. The project is still open source — clone and run it locally.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function NavBar({
   theme,
   setTheme,
-  loggedIn,
 }: {
   theme: Theme;
   setTheme: (t: Theme) => void;
-  loggedIn: boolean;
 }) {
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200/70 bg-white/80 backdrop-blur-md dark:border-slate-800/70 dark:bg-slate-950/80">
@@ -96,29 +105,21 @@ function NavBar({
 
         <div className="flex items-center gap-2">
           <ThemeToggle theme={theme} setTheme={setTheme} />
-          {loggedIn ? (
-            <Link
-              href="/projects"
-              className="rounded-lg bg-sky-600 px-3.5 py-1.5 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-500"
-            >
-              Open app
-            </Link>
-          ) : (
-            <>
-              <Link
-                href="/login"
-                className="hidden rounded-lg px-3 py-1.5 text-sm text-slate-700 transition hover:bg-slate-100 sm:inline-block dark:text-slate-200 dark:hover:bg-slate-900"
-              >
-                Log in
-              </Link>
-              <Link
-                href="/signup"
-                className="rounded-lg bg-sky-600 px-3.5 py-1.5 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-500"
-              >
-                Sign up
-              </Link>
-            </>
-          )}
+          <span
+            aria-label="Service status"
+            className="hidden rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500 sm:inline-block dark:border-slate-700 dark:text-slate-400"
+          >
+            Service offline
+          </span>
+          <a
+            href="https://github.com/SCCapstone/CapstoneBots"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3.5 py-1.5 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-500"
+          >
+            <GitHubIcon />
+            View on GitHub
+          </a>
         </div>
       </div>
     </header>
@@ -145,7 +146,7 @@ function ThemeToggle({
   );
 }
 
-function Hero({ loggedIn }: { loggedIn: boolean }) {
+function Hero() {
   return (
     <section className="relative overflow-hidden">
       <div
@@ -176,13 +177,16 @@ function Hero({ loggedIn }: { loggedIn: boolean }) {
         </p>
 
         <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <Link
-            href={loggedIn ? "/projects" : "/signup"}
+          <a
+            href="https://github.com/SCCapstone/CapstoneBots"
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-600/20 transition hover:bg-sky-500"
           >
-            {loggedIn ? "Open your dashboard" : "Get started — it's free"}
+            <GitHubIcon />
+            View source &amp; run locally
             <ArrowIcon />
-          </Link>
+          </a>
           <a
             href="#demo"
             className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/60 px-5 py-2.5 text-sm font-semibold text-slate-800 backdrop-blur transition hover:border-sky-500 hover:text-sky-700 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-100 dark:hover:border-sky-400 dark:hover:text-sky-300"
@@ -434,12 +438,15 @@ function DashboardSection() {
               </li>
             ))}
           </ul>
-          <Link
-            href="/signup"
+          <a
+            href="https://github.com/SCCapstone/CapstoneBots"
+            target="_blank"
+            rel="noopener noreferrer"
             className="mt-8 inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-500"
           >
-            Try it free <ArrowIcon />
-          </Link>
+            <GitHubIcon />
+            View on GitHub <ArrowIcon />
+          </a>
         </div>
 
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-900 shadow-xl dark:border-slate-800">
@@ -521,17 +528,13 @@ function DemoSection() {
 
         <div className="mt-12 overflow-hidden rounded-2xl border border-slate-200 bg-slate-900 shadow-xl dark:border-slate-800">
           <div className="relative aspect-video w-full">
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-center">
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-sky-500/20 ring-4 ring-sky-500/30">
-                <PlayIconLarge />
-              </div>
-              <p className="mt-5 text-sm font-semibold text-white">
-                Final Demo — coming with the 1.0 release
-              </p>
-              <p className="mt-1 text-xs text-slate-400">
-                Placeholder while we cut the final video.
-              </p>
-            </div>
+            <iframe
+              className="absolute inset-0 h-full w-full"
+              src="https://www.youtube.com/embed/4_qDkTPjkkY"
+              title="Blender Collab — demo"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+            />
           </div>
         </div>
       </div>
@@ -753,6 +756,9 @@ function Footer() {
             </span>
           </div>
           <div className="flex items-center gap-5 text-sm">
+            <span className="text-xs text-slate-500">
+              Hosted service offline since May 5, 2026
+            </span>
             <a
               href="https://github.com/SCCapstone/CapstoneBots"
               target="_blank"
@@ -762,18 +768,6 @@ function Footer() {
               <GitHubIcon />
               GitHub
             </a>
-            <Link
-              href="/login"
-              className="text-slate-600 hover:text-sky-600 dark:text-slate-300 dark:hover:text-sky-400"
-            >
-              Log in
-            </Link>
-            <Link
-              href="/signup"
-              className="text-slate-600 hover:text-sky-600 dark:text-slate-300 dark:hover:text-sky-400"
-            >
-              Sign up
-            </Link>
           </div>
         </div>
       </div>
