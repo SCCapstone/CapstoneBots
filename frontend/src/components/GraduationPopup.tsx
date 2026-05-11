@@ -183,7 +183,7 @@ export function GraduationPopup() {
           </h2>
 
           <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-slate-600 dark:text-slate-300 sm:text-base">
-            <strong>WE DID IT!</strong> After four years of hard work, and we're officially <strong>alumni</strong>!
+            <strong>WE DID IT!</strong> After four years of hard work, we're officially <strong>alumni</strong>!
 			CSCE 490 and 492 pushed us to grow as engineers and teammates, and 
 			<strong> BlenderCollab</strong> has been the journey that brought it all together. 
 			Through every late night and breakthrough, 
