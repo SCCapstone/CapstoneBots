@@ -295,4 +295,4 @@ CapstoneBots/
 ---
 
 **Status**: Hosted service offline since 2026-05-05 — local Docker Compose deploy fully supported.
-**Last Updated:** 2026-05-05
+**Last Updated:** 2026-05-10
