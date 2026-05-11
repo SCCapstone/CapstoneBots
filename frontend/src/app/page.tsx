@@ -3,6 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useEffect, useState } from "react";
+import { GraduationPopup } from "@/components/GraduationPopup";
 
 type Theme = "light" | "dark";
 
@@ -38,6 +39,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-white text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-100">
+      <GraduationPopup />
       <ShutdownBanner />
       <NavBar theme={theme} setTheme={setTheme} />
       <Hero />
